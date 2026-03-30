@@ -18,6 +18,7 @@ RUN python3 -m pip install --upgrade pip
 RUN python3 -m pip install \
     numpy==1.19.5 \
     opencv-python==4.1.1.26 \
+    pyserial \
     pycuda \
     pyyaml
 

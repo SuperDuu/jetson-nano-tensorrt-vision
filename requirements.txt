@@ -1,0 +1,11 @@
+# Core Dependencies
+numpy==1.19.5
+opencv-python==4.1.1.26
+pyserial
+pycuda
+pyyaml
+
+# Model Conversion (Optional, but recommended for convert_model.py)
+onnx
+# Note: tensorflow and tf2onnx should be installed via NVIDIA's .whl for Jetson Nano
+# or using 'pip install tensorflow-gpu==1.15.5' if available for your L4T version.
