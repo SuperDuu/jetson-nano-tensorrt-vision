@@ -183,7 +183,8 @@ class RoboconSystem:
                     self.loss_counter += 1
                     tx, ty = self.vision.update_kalman()
                     
-                    if status_is_searching := (self.status_text == "SEARCHING"):
+                    status_is_searching = (self.status_text == "SEARCHING")
+                    if status_is_searching:
                         # If we never found anything, don't let Kalman drift from center
                         tx, ty = (w_f // 2, h_f // 2)
                     
