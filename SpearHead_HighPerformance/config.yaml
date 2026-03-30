@@ -5,7 +5,7 @@ system:
   async: true
 paths:
   models:
-    yolo_engine: "SpearHead_HighPerformance/models/yolo_best.engine"
+    yolo_engine: "models/yolo.engine"
 
 # Hardware configuration
 hardware:
