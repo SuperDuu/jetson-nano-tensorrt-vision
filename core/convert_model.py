@@ -67,13 +67,13 @@ def convert_onnx_to_engine(onnx_path, engine_path, fp16=True):
     cmd_with_mem = cmd + ["--memPoolSize=workspace:2048"]
     
     print(f"Running command: {' '.join(cmd_with_mem)}")
-    result = subprocess.run(cmd_with_mem, capture_output=True, text=True)
+    result = subprocess.run(cmd_with_mem, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     
     if result.returncode != 0 and "allowable" in result.stderr.lower():
         print("New --memPoolSize flag failed, falling back to --workspace...")
         cmd_with_work = cmd + ["--workspace=2048"]
         print(f"Running command: {' '.join(cmd_with_work)}")
-        result = subprocess.run(cmd_with_work, capture_output=True, text=True)
+        result = subprocess.run(cmd_with_work, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
     if result.returncode == 0:
         print(f"Successfully created TensorRT engine at {engine_path}")
