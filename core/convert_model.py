@@ -97,8 +97,11 @@ def main():
     engine_path = Path(args.output) if args.output else input_path.with_suffix(".engine")
     
     try:
-        # Step 1: Model -> ONNX
-        if input_path.suffix == '.h5':
+        # Step 1: Model -> ONNX (skip if input is already ONNX)
+        if input_path.suffix == '.onnx':
+            print(f"Input is already ONNX, skipping step 1.")
+            onnx_path = input_path
+        elif input_path.suffix == '.h5':
             convert_h5_to_onnx(str(input_path), str(onnx_path))
         elif input_path.suffix in ['.pt', '.pth']:
             convert_pt_to_onnx(str(input_path), str(onnx_path), imgsz=args.imgsz, fp16=args.fp16)
