@@ -69,8 +69,9 @@ def convert_onnx_to_engine(onnx_path, engine_path, fp16=True):
     print(f"Running command: {' '.join(cmd_with_mem)}")
     result = subprocess.run(cmd_with_mem, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     
-    if result.returncode != 0 and "allowable" in result.stderr.lower():
-        print("New --memPoolSize flag failed, falling back to --workspace...")
+    # Fallback to --workspace if --memPoolSize is unknown (TRT < 8.4)
+    if result.returncode != 0 and ("unknown option" in result.stderr.lower() or "allowable" in result.stderr.lower()):
+        print("New --memPoolSize flag failed or not supported, falling back to --workspace...")
         cmd_with_work = cmd + ["--workspace=2048"]
         print(f"Running command: {' '.join(cmd_with_work)}")
         result = subprocess.run(cmd_with_work, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
