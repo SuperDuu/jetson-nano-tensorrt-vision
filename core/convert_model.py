@@ -23,6 +23,12 @@ def convert_pt_to_onnx(pt_path, onnx_path, imgsz=512, fp16=True):
         print("WARNING: CUDA not available. Exporting ONNX in FP32 instead of FP16.")
 
     print(f"Converting {pt_path} to {onnx_path} (FP16={use_half}, imgsz={imgsz})...")
+    
+    # Delete stale ONNX to force fresh export
+    if os.path.exists(onnx_path):
+        os.remove(onnx_path)
+        print(f"  Removed old ONNX: {onnx_path}")
+    
     try:
         # Try Ultralytics first (for YOLOv8/v11)
         from ultralytics import YOLO
@@ -57,44 +63,48 @@ def patch_mod_nodes(onnx_path):
     Mod(x, y) = Sub(x, Mul(Floor(Div(x, y)), y))
     This is required for TensorRT 8.2 which does not support the Mod operator.
     """
+    # Auto-install onnx if not available
     try:
         import onnx
-        from onnx import helper, TensorProto
-        model = onnx.load(onnx_path)
-        graph = model.graph
-        nodes_to_remove = []
-        nodes_to_add = []
-        
-        for node in graph.node:
-            if node.op_type == 'Mod':
-                print(f"  Patching unsupported Mod node: {node.name}")
-                x_input = node.input[0]
-                y_input = node.input[1]
-                output = node.output[0]
-                prefix = node.name or output
-                
-                div_out = prefix + "_div"
-                floor_out = prefix + "_floor"
-                mul_out = prefix + "_mul"
-                
-                div_node = helper.make_node('Div', [x_input, y_input], [div_out], name=prefix + '_Div')
-                floor_node = helper.make_node('Floor', [div_out], [floor_out], name=prefix + '_Floor')
-                mul_node = helper.make_node('Mul', [floor_out, y_input], [mul_out], name=prefix + '_Mul')
-                sub_node = helper.make_node('Sub', [x_input, mul_out], [output], name=prefix + '_Sub')
-                
-                nodes_to_remove.append(node)
-                nodes_to_add.extend([div_node, floor_node, mul_node, sub_node])
-        
-        if nodes_to_remove:
-            for n in nodes_to_remove:
-                graph.node.remove(n)
-            graph.node.extend(nodes_to_add)
-            onnx.save(model, onnx_path)
-            print(f"  Patched {len(nodes_to_remove)} Mod node(s) in {onnx_path}")
-        else:
-            print(f"  No Mod nodes found, ONNX is clean.")
     except ImportError:
-        print("  WARNING: 'onnx' package not installed, skipping Mod patch. Install with: pip install onnx")
+        print("  'onnx' package not found, installing...")
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'onnx'])
+        import onnx
+    
+    from onnx import helper
+    model = onnx.load(onnx_path)
+    graph = model.graph
+    nodes_to_remove = []
+    nodes_to_add = []
+    
+    for node in graph.node:
+        if node.op_type == 'Mod':
+            print(f"  Patching unsupported Mod node: {node.name}")
+            x_input = node.input[0]
+            y_input = node.input[1]
+            output = node.output[0]
+            prefix = node.name or output
+            
+            div_out = prefix + "_div"
+            floor_out = prefix + "_floor"
+            mul_out = prefix + "_mul"
+            
+            div_node = helper.make_node('Div', [x_input, y_input], [div_out], name=prefix + '_Div')
+            floor_node = helper.make_node('Floor', [div_out], [floor_out], name=prefix + '_Floor')
+            mul_node = helper.make_node('Mul', [floor_out, y_input], [mul_out], name=prefix + '_Mul')
+            sub_node = helper.make_node('Sub', [x_input, mul_out], [output], name=prefix + '_Sub')
+            
+            nodes_to_remove.append(node)
+            nodes_to_add.extend([div_node, floor_node, mul_node, sub_node])
+    
+    if nodes_to_remove:
+        for n in nodes_to_remove:
+            graph.node.remove(n)
+        graph.node.extend(nodes_to_add)
+        onnx.save(model, onnx_path)
+        print(f"  Patched {len(nodes_to_remove)} Mod node(s) in {onnx_path}")
+    else:
+        print(f"  No Mod nodes found, ONNX is clean.")
 
 def convert_onnx_to_engine(onnx_path, engine_path, fp16=True):
     """Converts .onnx to .engine using trtexec."""
@@ -106,25 +116,11 @@ def convert_onnx_to_engine(onnx_path, engine_path, fp16=True):
     trtexec_path = "/usr/src/tensorrt/bin/trtexec"
     if not os.path.exists(trtexec_path): trtexec_path = "trtexec"
     
-    # Use --memPoolSize=workspace:2048 if possible (TRT 8.x+), fallback to --workspace=2048
-    cmd = [trtexec_path, f"--onnx={onnx_path}", f"--saveEngine={engine_path}"]
-    if fp16: cmd.append("--fp16")
+    # Jetson Nano (JetPack 4.6) uses TRT 8.2 which supports --workspace only
+    cmd_run = cmd + ["--workspace=2048"]
     
-    # Try new syntax first, if it fails, the user might need to adjust or we could try fallback
-    # For simplicity in this script, we'll try to detect or just use the most compatible one.
-    # Jetson Nano (JetPack 4.6) uses TRT 8.2 which supports --workspace.
-    # Newer TRT uses --memPoolSize.
-    cmd_with_mem = cmd + ["--memPoolSize=workspace:2048"]
-    
-    print(f"Running command: {' '.join(cmd_with_mem)}")
-    result = subprocess.run(cmd_with_mem, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    
-    # Fallback to --workspace if --memPoolSize is unknown (TRT < 8.4)
-    if result.returncode != 0 and ("unknown option" in result.stderr.lower() or "allowable" in result.stderr.lower()):
-        print("New --memPoolSize flag failed or not supported, falling back to --workspace...")
-        cmd_with_work = cmd + ["--workspace=2048"]
-        print(f"Running command: {' '.join(cmd_with_work)}")
-        result = subprocess.run(cmd_with_work, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    print(f"Running command: {' '.join(cmd_run)}")
+    result = subprocess.run(cmd_run, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
     if result.returncode == 0:
         print(f"Successfully created TensorRT engine at {engine_path}")
