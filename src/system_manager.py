@@ -39,8 +39,7 @@ class SystemManager:
         self.state = self.config['system']['initial_state']
         self.force_square = self.config['system']['force_square']
         self.headless = self.config['system']['headless']
-        self.target_fps = self.config['system']['target_fps']
-        self.frame_duration = 1.0 / self.target_fps
+        # FPS capping removed — run at max throughput
         
         # Model references (None until loaded)
         self.v1_vision = None
@@ -324,8 +323,7 @@ class SystemManager:
                 self._warmup_idle_engines()
                 warmup_counter = 0
                 
-            # Sleep slightly to prevent this thread from starving the UI/Camera threads on weak CPUs
-            time.sleep(0.01)
+            # No sleep — run inference at max throughput
 
     def run(self):
         print(f"--- RUN LOOP START | HEADLESS: {self.headless} ---", flush=True)
@@ -337,7 +335,7 @@ class SystemManager:
         self.max_loss_frames = self.config['detection']['max_loss_frames']
         self.current_label = "NONE"
         self.current_status = "SEARCHING"
-        self.inference_skip = self.config['system'].get('inference_skip', 1)
+        # inference_skip removed — process every frame
         self.all_dets = []
 
         try:
@@ -404,7 +402,7 @@ class SystemManager:
                     tx, ty = w_orig // 2, h_orig // 2
                     
                 # Status Hysteresis (Stay LOCKED if we just missed a few AI frames)
-                if self.loss_counter <= self.inference_skip:
+                if self.loss_counter <= 1:
                     self.current_status = "LOCKED"
                 elif self.loss_counter < self.max_loss_frames:
                     self.current_status = "SEARCHING"
@@ -498,9 +496,7 @@ class SystemManager:
                         self.state = int(chr(key))
                         logger.info(f"Switched state to: {self.state}")
                 
-                # FPS Capping
-                wait = self.frame_duration - (time.time() - loop_start)
-                if wait > 0: time.sleep(wait)
+                # FPS capping removed — run at max throughput
         finally:
             self.cleanup()
 
