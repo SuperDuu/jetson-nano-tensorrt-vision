@@ -3,6 +3,7 @@ import pycuda.driver as cuda
 import pycuda.autoinit
 import numpy as np
 import logging
+import threading
 
 class TRTEngine:
     def __init__(self, engine_path, max_batch_size=1):
@@ -16,7 +17,10 @@ class TRTEngine:
             self.engine = self.runtime.deserialize_cuda_engine(f.read())
             
         self.context = self.engine.create_execution_context()
+        # Store CUDA context for thread-safe push/pop
+        self.cuda_ctx = cuda.Context.get_current()
         self.inputs, self.outputs, self.bindings, self.stream = self._allocate_buffers()
+        self._lock = threading.Lock()
         
     def _allocate_buffers(self):
         inputs = []
@@ -44,22 +48,27 @@ class TRTEngine:
         return inputs, outputs, bindings, stream
 
     def predict(self, input_data):
-        # input_data is a numpy array
-        # 1. Copy host to device
-        self.inputs[0]['host'] = np.ascontiguousarray(input_data)
-        cuda.memcpy_htod_async(self.inputs[0]['device'], self.inputs[0]['host'], self.stream)
-        
-        # 2. Execute
-        self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
-        
-        # 3. Copy device to host
-        for out in self.outputs:
-            cuda.memcpy_dtoh_async(out['host'], out['device'], self.stream)
-            
-        # 4. Synchronize stream
-        self.stream.synchronize()
-        
-        return [out['host'] for out in self.outputs]
+        # Thread-safe inference with CUDA context push/pop
+        with self._lock:
+            self.cuda_ctx.push()
+            try:
+                # 1. Copy host to device
+                self.inputs[0]['host'] = np.ascontiguousarray(input_data)
+                cuda.memcpy_htod_async(self.inputs[0]['device'], self.inputs[0]['host'], self.stream)
+                
+                # 2. Execute
+                self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
+                
+                # 3. Copy device to host
+                for out in self.outputs:
+                    cuda.memcpy_dtoh_async(out['host'], out['device'], self.stream)
+                    
+                # 4. Synchronize stream
+                self.stream.synchronize()
+                
+                return [out['host'].copy() for out in self.outputs]
+            finally:
+                self.cuda_ctx.pop()
 
     def __del__(self):
         # Explicitly release resources if needed, though pycuda often handles it

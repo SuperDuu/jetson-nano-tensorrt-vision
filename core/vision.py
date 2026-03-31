@@ -63,6 +63,11 @@ class RobotVision:
         outputs = self.model.predict(input_data)
         predictions = np.squeeze(outputs[0])  # Assuming primary output is the first binding
 
+        # Guard: if inference failed or returned unexpected shape, bail out
+        if predictions.ndim < 2:
+            self.logger.warning("TRT output has unexpected shape: %s, skipping frame", predictions.shape)
+            return []
+
         # ─── Tự detect output format ───────────────────────────
         # YOLO26n: [300, 6] → shape[1] == 6, đã NMS sẵn
         # YOLOv8n: [5, 5376] → shape[0] < shape[1], raw anchors
