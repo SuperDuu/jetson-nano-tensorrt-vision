@@ -13,14 +13,28 @@ def convert_h5_to_onnx(h5_path, onnx_path):
     tf2onnx.convert.from_keras(model, input_signature=spec, output_path=onnx_path)
     print(f"Successfully saved ONNX model to {onnx_path}")
 
-def convert_pt_to_onnx(pt_path, onnx_path, imgsz=640):
+def convert_pt_to_onnx(pt_path, onnx_path, imgsz=512, fp16=True):
     """Converts .pt (PyTorch) to .onnx."""
-    print(f"Converting {pt_path} to {onnx_path}...")
+    import torch
+    # half=True requires CUDA for export in many versions
+    use_half = fp16 and torch.cuda.is_available()
+    if fp16 and not torch.cuda.is_available():
+        print("WARNING: CUDA not available. Exporting ONNX in FP32 instead of FP16.")
+
+    print(f"Converting {pt_path} to {onnx_path} (FP16={use_half}, imgsz={imgsz})...")
     try:
         # Try Ultralytics first (for YOLOv8/v11)
         from ultralytics import YOLO
         model = YOLO(pt_path)
-        model.export(format='onnx', imgsz=imgsz, dynamic=False)
+        model.export(
+            format='onnx', 
+            imgsz=imgsz, 
+            dynamic=False, 
+            half=use_half,
+            simplify=True,
+            opset=12,
+            nms=False # Handle NMS in inference code for better performance
+        )
         # Ultralytics saves it in the same dir as model.onnx
         src_onnx = Path(pt_path).with_suffix('.onnx')
         if str(src_onnx) != onnx_path:
@@ -42,11 +56,25 @@ def convert_onnx_to_engine(onnx_path, engine_path, fp16=True):
     trtexec_path = "/usr/src/tensorrt/bin/trtexec"
     if not os.path.exists(trtexec_path): trtexec_path = "trtexec"
     
-    cmd = [trtexec_path, f"--onnx={onnx_path}", f"--saveEngine={engine_path}", "--workspace=1024"]
+    # Use --memPoolSize=workspace:2048 if possible (TRT 8.x+), fallback to --workspace=2048
+    cmd = [trtexec_path, f"--onnx={onnx_path}", f"--saveEngine={engine_path}"]
     if fp16: cmd.append("--fp16")
     
-    print(f"Running command: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Try new syntax first, if it fails, the user might need to adjust or we could try fallback
+    # For simplicity in this script, we'll try to detect or just use the most compatible one.
+    # Jetson Nano (JetPack 4.6) uses TRT 8.2 which supports --workspace.
+    # Newer TRT uses --memPoolSize.
+    cmd_with_mem = cmd + ["--memPoolSize=workspace:2048"]
+    
+    print(f"Running command: {' '.join(cmd_with_mem)}")
+    result = subprocess.run(cmd_with_mem, capture_output=True, text=True)
+    
+    if result.returncode != 0 and "allowable" in result.stderr.lower():
+        print("New --memPoolSize flag failed, falling back to --workspace...")
+        cmd_with_work = cmd + ["--workspace=2048"]
+        print(f"Running command: {' '.join(cmd_with_work)}")
+        result = subprocess.run(cmd_with_work, capture_output=True, text=True)
+
     if result.returncode == 0:
         print(f"Successfully created TensorRT engine at {engine_path}")
     else:
@@ -56,7 +84,7 @@ def main():
     parser = argparse.ArgumentParser(description="Convert .h5 or .pt model to TensorRT .engine")
     parser.add_argument("input", type=str, help="Path to input (.h5 or .pt) file")
     parser.add_argument("--output", type=str, default=None, help="Path to output .engine file")
-    parser.add_argument("--imgsz", type=int, default=640, help="Input image size (default 640)")
+    parser.add_argument("--imgsz", type=int, default=512, help="Input image size (default 512)")
     parser.add_argument("--no-fp16", action="store_false", dest="fp16", help="Disable FP16 precision")
     parser.set_defaults(fp16=True)
     
@@ -73,7 +101,7 @@ def main():
         if input_path.suffix == '.h5':
             convert_h5_to_onnx(str(input_path), str(onnx_path))
         elif input_path.suffix in ['.pt', '.pth']:
-            convert_pt_to_onnx(str(input_path), str(onnx_path), imgsz=args.imgsz)
+            convert_pt_to_onnx(str(input_path), str(onnx_path), imgsz=args.imgsz, fp16=args.fp16)
         else:
             print(f"Unsupported file type: {input_path.suffix}"); return
         
