@@ -70,7 +70,7 @@ class ConfigManager:
                             # If it exists relative to project root, resolve it
                             potential_path = self.project_root / p
                             # We check common extensions to avoid resolving random strings
-                            if p.suffix in ['.xml', '.bin', '.json', '.pt', '.yaml', '.txt', '.jpg', '.png']:
+                            if p.suffix in ['.xml', '.bin', '.json', '.pt', '.yaml', '.txt', '.jpg', '.png', '.engine']:
                                 data[k] = str(potential_path)
             elif isinstance(data, list):
                 for i in range(len(data)):

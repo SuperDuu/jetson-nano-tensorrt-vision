@@ -7,6 +7,7 @@ This module provides threaded camera capture for low-latency video streaming.
 import cv2
 import threading
 import logging
+from collections import deque
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -36,9 +37,10 @@ class CameraStream:
         self.logger = logging.getLogger(f"{__name__}.CameraStream")
         
         self.cap: Optional[cv2.VideoCapture] = None
-        self.frame: Optional[cv2.VideoCapture] = None
+        self._frame_buf = deque(maxlen=1)  # Only keep the latest frame
         self.stopped = False
         self.lock = threading.Lock()
+        self.new_frame_event = threading.Event()
         
         self._init_camera()
     
@@ -60,9 +62,10 @@ class CameraStream:
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             
             # Read initial frame
-            success, self.frame = self.cap.read()
+            success, frame = self.cap.read()
             if not success:
                 raise RuntimeError(f"Failed to read initial frame from camera {self.src}")
+            self._frame_buf.append(frame)
             
             self.logger.info(f"Camera {self.src} initialized successfully")
         
@@ -94,7 +97,8 @@ class CameraStream:
                 success, frame = self.cap.read()
                 if success:
                     with self.lock:
-                        self.frame = frame
+                        self._frame_buf.append(frame)
+                    self.new_frame_event.set()
                 else:
                     self.logger.warning("Failed to read frame from camera")
                     self.stopped = True
@@ -113,7 +117,22 @@ class CameraStream:
             Latest frame or None if not available
         """
         with self.lock:
-            return self.frame
+            return self._frame_buf[-1] if self._frame_buf else None
+    
+    def read_latest(self) -> Optional[cv2.VideoCapture]:
+        """
+        Get the latest frame, dropping any stale frames.
+        
+        Clears the new_frame_event so the caller knows the next call
+        will only return after a genuinely new frame arrives.
+        Use this in the inference thread to avoid processing old frames.
+        
+        Returns:
+            Latest frame or None if not available
+        """
+        self.new_frame_event.clear()
+        with self.lock:
+            return self._frame_buf[-1] if self._frame_buf else None
     
     def stop(self) -> None:
         """Stop camera stream and release resources."""
