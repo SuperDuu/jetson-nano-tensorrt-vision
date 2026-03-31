@@ -32,7 +32,7 @@ def convert_pt_to_onnx(pt_path, onnx_path, imgsz=512, fp16=True):
             dynamic=False, 
             half=use_half,
             simplify=True,
-            opset=12,
+            opset=11,  # Opset 11 is safer for TensorRT 8.2 on Jetson Nano
             nms=False # Handle NMS in inference code for better performance
         )
         # Ultralytics saves it in the same dir as model.onnx
@@ -46,7 +46,7 @@ def convert_pt_to_onnx(pt_path, onnx_path, imgsz=512, fp16=True):
         if hasattr(model, 'model'): model = model.model # Handle wrapped models
         model.eval()
         dummy_input = torch.randn(1, 3, imgsz, imgsz)
-        torch.onnx.export(model, dummy_input, onnx_path, opset_version=12)
+        torch.onnx.export(model, dummy_input, onnx_path, opset_version=11)
     
     print(f"Successfully saved ONNX model to {onnx_path}")
 
@@ -80,6 +80,7 @@ def convert_onnx_to_engine(onnx_path, engine_path, fp16=True):
         print(f"Successfully created TensorRT engine at {engine_path}")
     else:
         print(f"Conversion failed!\n{result.stdout}\n{result.stderr}")
+        raise RuntimeError("trtexec failed to generate engine")
 
 def main():
     parser = argparse.ArgumentParser(description="Convert .h5 or .pt model to TensorRT .engine")
@@ -114,8 +115,10 @@ def main():
         
     except ImportError as e:
         print(f"\nError: Missing dependency {e.name}. Please install it.")
+        sys.exit(1)
     except Exception as e:
         print(f"An error occurred: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
