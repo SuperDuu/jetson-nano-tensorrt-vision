@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import argparse
 from pathlib import Path
@@ -50,9 +51,58 @@ def convert_pt_to_onnx(pt_path, onnx_path, imgsz=512, fp16=True):
     
     print(f"Successfully saved ONNX model to {onnx_path}")
 
+def patch_mod_nodes(onnx_path):
+    """
+    Replace unsupported 'Mod' nodes with TensorRT-compatible equivalent:
+    Mod(x, y) = Sub(x, Mul(Floor(Div(x, y)), y))
+    This is required for TensorRT 8.2 which does not support the Mod operator.
+    """
+    try:
+        import onnx
+        from onnx import helper, TensorProto
+        model = onnx.load(onnx_path)
+        graph = model.graph
+        nodes_to_remove = []
+        nodes_to_add = []
+        
+        for node in graph.node:
+            if node.op_type == 'Mod':
+                print(f"  Patching unsupported Mod node: {node.name}")
+                x_input = node.input[0]
+                y_input = node.input[1]
+                output = node.output[0]
+                prefix = node.name or output
+                
+                div_out = prefix + "_div"
+                floor_out = prefix + "_floor"
+                mul_out = prefix + "_mul"
+                
+                div_node = helper.make_node('Div', [x_input, y_input], [div_out], name=prefix + '_Div')
+                floor_node = helper.make_node('Floor', [div_out], [floor_out], name=prefix + '_Floor')
+                mul_node = helper.make_node('Mul', [floor_out, y_input], [mul_out], name=prefix + '_Mul')
+                sub_node = helper.make_node('Sub', [x_input, mul_out], [output], name=prefix + '_Sub')
+                
+                nodes_to_remove.append(node)
+                nodes_to_add.extend([div_node, floor_node, mul_node, sub_node])
+        
+        if nodes_to_remove:
+            for n in nodes_to_remove:
+                graph.node.remove(n)
+            graph.node.extend(nodes_to_add)
+            onnx.save(model, onnx_path)
+            print(f"  Patched {len(nodes_to_remove)} Mod node(s) in {onnx_path}")
+        else:
+            print(f"  No Mod nodes found, ONNX is clean.")
+    except ImportError:
+        print("  WARNING: 'onnx' package not installed, skipping Mod patch. Install with: pip install onnx")
+
 def convert_onnx_to_engine(onnx_path, engine_path, fp16=True):
     """Converts .onnx to .engine using trtexec."""
     print(f"Converting {onnx_path} to {engine_path} (FP16={fp16})...")
+    
+    # Patch unsupported Mod nodes before conversion
+    patch_mod_nodes(onnx_path)
+    
     trtexec_path = "/usr/src/tensorrt/bin/trtexec"
     if not os.path.exists(trtexec_path): trtexec_path = "trtexec"
     
