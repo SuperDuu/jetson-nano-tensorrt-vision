@@ -27,9 +27,11 @@ class TRTEngine:
         outputs = []
         bindings = []
         stream = cuda.Stream()
+        output_shapes = []
         
         for binding in self.engine:
-            size = trt.volume(self.engine.get_binding_shape(binding)) * self.engine.max_batch_size
+            shape = self.engine.get_binding_shape(binding)
+            size = trt.volume(shape) * self.engine.max_batch_size
             dtype = trt.nptype(self.engine.get_binding_dtype(binding))
             
             # Allocate host and device buffers
@@ -44,7 +46,10 @@ class TRTEngine:
                 inputs.append({'host': host_mem, 'device': device_mem})
             else:
                 outputs.append({'host': host_mem, 'device': device_mem})
-                
+                output_shapes.append(tuple(shape))
+        
+        self.output_shapes = output_shapes
+        self.logger.info(f"Output bindings: {output_shapes}")
         return inputs, outputs, bindings, stream
 
     def predict(self, input_data):
@@ -66,7 +71,7 @@ class TRTEngine:
                 # 4. Synchronize stream
                 self.stream.synchronize()
                 
-                return [out['host'].copy() for out in self.outputs]
+                return [out['host'].copy().reshape(shape) for out, shape in zip(self.outputs, self.output_shapes)]
             finally:
                 self.cuda_ctx.pop()
 
