@@ -34,14 +34,11 @@ def _build_gst_pipeline(src, width, height, framerate=30, camera_type="auto"):
         GStreamer pipeline string.
     """
     if camera_type == "auto":
-        # CSI cameras on Jetson use nvarguscamerasrc (no /dev/videoN path)
-        if isinstance(src, int) and src == 0:
-            camera_type = "csi"
-        else:
-            camera_type = "usb"
+        # Default to USB webcam — CSI requires explicit camera_type='csi'
+        camera_type = "usb"
 
     if camera_type == "csi":
-        # CSI camera via Jetson ISP
+        # CSI camera via Jetson ISP (only if explicitly requested)
         pipeline = (
             "nvarguscamerasrc sensor-id={src} ! "
             "video/x-raw(memory:NVMM), width=(int){w}, height=(int){h}, "
@@ -53,17 +50,37 @@ def _build_gst_pipeline(src, width, height, framerate=30, camera_type="auto"):
             "appsink drop=true max-buffers=1"
         ).format(src=src, w=width, h=height, fps=framerate)
     else:
-        # USB camera via v4l2
+        # USB webcam — optimized for Jetson Nano
+        # Uses v4l2src with nvvidconv for hardware-accelerated color conversion
         dev = src if isinstance(src, str) else "/dev/video{}".format(src)
         pipeline = (
-            "v4l2src device={dev} ! "
-            "video/x-raw, width=(int){w}, height=(int){h} ! "
+            "v4l2src device={dev} io-mode=2 ! "
+            "image/jpeg, width=(int){w}, height=(int){h}, "
+            "framerate=(fraction){fps}/1 ! "
+            "nvv4l2decoder mjpeg=1 ! "
+            "nvvidconv ! "
+            "video/x-raw, format=(string)BGRx ! "
             "videoconvert ! "
             "video/x-raw, format=(string)BGR ! "
             "appsink drop=true max-buffers=1"
-        ).format(dev=dev, w=width, h=height)
+        ).format(dev=dev, w=width, h=height, fps=framerate)
 
     return pipeline
+
+
+def _build_gst_pipeline_usb_raw(src, width, height, framerate=30):
+    """
+    Fallback USB pipeline without MJPEG decode (for cams that only output raw YUYV).
+    """
+    dev = src if isinstance(src, str) else "/dev/video{}".format(src)
+    return (
+        "v4l2src device={dev} ! "
+        "video/x-raw, width=(int){w}, height=(int){h}, "
+        "framerate=(fraction){fps}/1 ! "
+        "videoconvert ! "
+        "video/x-raw, format=(string)BGR ! "
+        "appsink drop=true max-buffers=1"
+    ).format(dev=dev, w=width, h=height, fps=framerate)
 
 
 class GstCameraStream(object):
@@ -101,32 +118,24 @@ class GstCameraStream(object):
         self._init_camera()
 
     def _init_camera(self):
-        """Initialize camera with GStreamer pipeline, fallback to raw OpenCV."""
-        # Try GStreamer pipeline first
+        """Initialize camera: try GStreamer MJPEG → GStreamer raw → OpenCV fallback."""
+        # Attempt 1: GStreamer MJPEG hardware decode (fastest for USB webcam)
         pipeline = _build_gst_pipeline(
             self.src, self.width, self.height,
             self.framerate, self.camera_type
         )
-        self.logger.info("Trying GStreamer pipeline: %s", pipeline)
+        if self._try_gst_pipeline(pipeline, "GStreamer MJPEG"):
+            return
 
-        try:
-            self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-            if self.cap.isOpened():
-                success, frame = self.cap.read()
-                if success:
-                    self._frame_buf.append(frame)
-                    self._using_gst = True
-                    self.logger.info(
-                        "GStreamer camera initialized: %dx%d",
-                        frame.shape[1], frame.shape[0]
-                    )
-                    return
-                else:
-                    self.cap.release()
-        except Exception as e:
-            self.logger.warning("GStreamer init failed: %s", e)
+        # Attempt 2: GStreamer raw YUYV (for cams without MJPEG support)
+        if self.camera_type in ("auto", "usb"):
+            raw_pipeline = _build_gst_pipeline_usb_raw(
+                self.src, self.width, self.height, self.framerate
+            )
+            if self._try_gst_pipeline(raw_pipeline, "GStreamer raw"):
+                return
 
-        # Fallback to raw OpenCV
+        # Attempt 3: Plain OpenCV VideoCapture
         if self.fallback_opencv:
             self.logger.info("Falling back to OpenCV VideoCapture(%s)", self.src)
             self.cap = cv2.VideoCapture(self.src)
@@ -144,7 +153,28 @@ class GstCameraStream(object):
             self._using_gst = False
             self.logger.info("OpenCV fallback camera initialized: %s", frame.shape)
         else:
-            raise RuntimeError("GStreamer camera failed and fallback disabled")
+            raise RuntimeError("All camera backends failed")
+
+    def _try_gst_pipeline(self, pipeline, name):
+        """Try to open a GStreamer pipeline. Returns True on success."""
+        self.logger.info("Trying %s: %s", name, pipeline)
+        try:
+            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                success, frame = cap.read()
+                if success:
+                    self._frame_buf.append(frame)
+                    self._using_gst = True
+                    self.cap = cap
+                    self.logger.info(
+                        "%s camera initialized: %dx%d",
+                        name, frame.shape[1], frame.shape[0]
+                    )
+                    return True
+                cap.release()
+        except Exception as e:
+            self.logger.warning("%s init failed: %s", name, e)
+        return False
 
     def start(self):
         """Start background frame capture thread. Returns self."""
