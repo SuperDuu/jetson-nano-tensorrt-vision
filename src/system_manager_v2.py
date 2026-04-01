@@ -108,13 +108,14 @@ class SystemManagerV2(object):
     def _init_hardware(self):
         self.use_test_image = self.config['system'].get('test_image', False)
         if self.use_test_image:
-            img_path = self.config['system']['test_image_path']
-            self.test_frame = cv2.imread(img_path)
+            self.test_img_path = self.config['system']['test_image_path']
+            abs_img_path = self.config_manager.get_path('system.test_image_path')
+            self.test_frame = cv2.imread(abs_img_path)
             if self.test_frame is None:
-                print("FAILED TO LOAD TEST IMAGE: {}".format(img_path), flush=True)
+                print("FAILED TO LOAD TEST IMAGE: {}".format(abs_img_path), flush=True)
                 self.use_test_image = False
             else:
-                print("TEST IMAGE: {} {}".format(img_path, self.test_frame.shape), flush=True)
+                print("TEST IMAGE: {} {}".format(abs_img_path, self.test_frame.shape), flush=True)
 
         if not self.use_test_image:
             cam_cfg = self.config['hardware']['camera']
@@ -146,36 +147,58 @@ class SystemManagerV2(object):
         # V1 (SpearHead)
         if self.load_mode in (2, 3):
             v1_cfg = self.config['v1_model']
-            v1_engine = v1_cfg['yolo_engine']
+            v1_engine = self.config_manager.get_path('v1_model.yolo_engine')
             imgsz = v1_cfg.get('input_size', 512)
             print("  Loading V1 Engine (GPU V2): {}".format(v1_engine), flush=True)
             self.v1_vision = RobotVisionV2(v1_engine, imgsz=imgsz, device="GPU")
             print("  - V1 (SpearHead): SUCCESS", flush=True)
+        else:
+            print("  - V1 (SpearHead): SKIPPED (load_mode={})".format(self.load_mode), flush=True)
 
         # V2 (KFS)
         if self.load_mode in (1, 3):
             v2_cfg = self.config['v2_model']
-            v2_yolo = v2_cfg['yolo_engine']
+            v2_yolo = self.config_manager.get_path('v2_model.yolo_engine')
             imgsz = v2_cfg.get('yolo_input_size', 512)
             print("  Loading V2 YOLO (GPU V2): {}".format(v2_yolo), flush=True)
             self.v2_vision = RobotVisionV2(v2_yolo, imgsz=imgsz, device="GPU")
 
-            v2_cnn = v2_cfg['cnn_engine']
+            v2_cnn = self.config_manager.get_path('v2_model.cnn_engine')
             print("  Loading V2 CNN: {}".format(v2_cnn), flush=True)
             self.v2_cnn = TRTEngineV2(v2_cnn)
 
-            with open(v2_cfg['labels_json'], 'r') as f:
+            labels_path = self.config_manager.get_path('v2_model.labels_json')
+            with open(labels_path, 'r') as f:
                 self.v2_labels = {int(v): k for k, v in json.load(f).items()}
             self.v2_smoother = LabelSmoother(window_size=7)
             print("  - V2 (KFS): SUCCESS", flush=True)
+        else:
+            print("  - V2 (KFS): SKIPPED (load_mode={})".format(self.load_mode), flush=True)
 
         # Lock state for single-mode
         if self.load_mode == 1:
             self.state = 2
+            print("  State locked to 2 (KFS) for load_mode=1", flush=True)
         elif self.load_mode == 2:
             self.state = 1
+            print("  State locked to 1 (SpearHead) for load_mode=2", flush=True)
 
         print("=" * 50 + "\n", flush=True)
+
+    def _warmup_idle_engines(self):
+        """Send dummy tensor through idle engines to keep GPU memory hot."""
+        if self.load_mode != 3:
+            return
+        try:
+            if self.state != 1 and self.v1_vision:
+                dummy = np.zeros((1, 3, 512, 512), dtype=np.float32)
+                self.v1_vision.model.predict(dummy)
+            if self.state != 2 and self.v2_cnn:
+                cnn_sz = self.config['v2_model']['cnn_input_size']
+                dummy_cnn = np.zeros((1, 3, cnn_sz, cnn_sz), dtype=np.float32)
+                self.v2_cnn.predict(dummy_cnn)
+        except Exception as e:
+            logger.debug("Warm-up pass: %s", e)
 
     def _get_current_vision(self):
         """Get the active RobotVisionV2 for current state."""
@@ -224,17 +247,33 @@ class SystemManagerV2(object):
         """
         Run target selection, CNN classification (V2), and return (point, label).
         """
+        all_dets = []
         if self.state == 1 and vision:
             candidates = self._get_valid_candidates(dets, w_orig, h_orig)
             if candidates:
                 det = candidates[0]
                 cx = int((det.xyxy[0][0] + det.xyxy[0][2]) // 2)
                 cy = int((det.xyxy[0][1] + det.xyxy[0][3]) // 2)
-                return (cx, cy), "TARGET"
+
+                if self.use_test_image:
+                    for d in dets:
+                        x1, y1, x2, y2 = map(int, d.xyxy[0])
+                        label = "TARGET" if d == det else "CANDIDATE"
+                        all_dets.append(([x1, y1, x2, y2], label, float(d.conf)))
+
+                return (cx, cy), "TARGET", all_dets
+
+            if self.use_test_image:
+                for d in dets:
+                    x1, y1, x2, y2 = map(int, d.xyxy[0])
+                    all_dets.append(([x1, y1, x2, y2], "CANDIDATE", float(d.conf)))
 
         elif self.state == 2 and vision:
             candidates = self._get_valid_candidates(dets, w_orig, h_orig)
+            target_found = False
             for det in candidates:
+                if target_found: break
+
                 x1, y1, x2, y2 = map(int, det.xyxy[0])
                 roi = frame[max(0, y1):min(h_orig, y2), max(0, x1):min(w_orig, x2)]
                 cnn_input_size = self.config['v2_model']['cnn_input_size']
@@ -251,6 +290,9 @@ class SystemManagerV2(object):
                 target_names = [t.upper() for t in self.config['v2_model']['target_types']]
                 is_target = any(label_raw.startswith(t) or label_raw == t for t in target_names)
 
+                if self.use_test_image:
+                     all_dets.append(([x1, y1, x2, y2], label_raw, score))
+
                 if is_target and score >= self.config['v2_model']['conf_threshold_cnn']:
                     self.label_history.append(label_raw)
                     if len(self.label_history) > self.history_len:
@@ -262,13 +304,21 @@ class SystemManagerV2(object):
                     if votes >= self.min_majority:
                         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                         label, _ = self.v2_smoother.smooth("target", most_common, score)
-                        return (cx, cy), label
+                        target_found = True
+                        return (cx, cy), label, all_dets
 
-            # No target found — decay history
-            if len(self.label_history) > 0:
-                self.label_history.pop(0)
+            if not target_found:
+                if self.use_test_image:
+                    for d in dets:
+                        if not any(np.array_equal(d.xyxy[0], c.xyxy[0]) for c in candidates):
+                            x1v, y1v, x2v, y2v = map(int, d.xyxy[0])
+                            all_dets.append(([x1v, y1v, x2v, y2v], "YOLO", float(d.conf)))
+                            
+                # No target found — decay history
+                if len(self.label_history) > 0:
+                    self.label_history.pop(0)
 
-        return None, "NONE"
+        return None, "NONE", all_dets
 
     def run(self):
         """
@@ -321,7 +371,7 @@ class SystemManagerV2(object):
                         self._get_conf_threshold_for_state(prev_raw['state']),
                         prev_raw['scale'], prev_raw['pad_x'], prev_raw['pad_y'],
                     )
-                    new_pt, a_label = self._apply_tracking(
+                    new_pt, a_label, all_dets = self._apply_tracking(
                         dets, prev_frame, prev_vision,
                         prev_raw['h'], prev_raw['w'],
                     )
@@ -365,6 +415,9 @@ class SystemManagerV2(object):
                     else:
                         sc_x = w_orig // 2
                         target_point = (tx, ty)
+                        scale_d = 1.0
+                        pw = 0
+                        ph = 0
 
                     err_x = int(target_point[0] - sc_x) if current_status in ("LOCKED", "SEARCHING") else 999
 
@@ -396,10 +449,22 @@ class SystemManagerV2(object):
                             df = letterbox(prev_frame, (512, 512))[0]
                         else:
                             df = prev_frame.copy()
+
+                        # Overlays for test_image mode (same as system_manager.py)
+                        if self.use_test_image and all_dets:
+                            for box, b_label, b_score in all_dets:
+                                bx1, by1, bx2, by2 = box
+                                dbx1, dby1 = int(bx1 * scale_d + pw), int(by1 * scale_d + ph)
+                                dbx2, dby2 = int(bx2 * scale_d + pw), int(by2 * scale_d + ph)
+                                cv2.rectangle(df, (dbx1, dby1), (dbx2, dby2), (0, 255, 0), 1)
+                                cv2.putText(df, "{} {:.2f}".format(b_label, b_score),
+                                            (dbx1, dby1 - 5), 0, 0.4, (0, 255, 0), 1)
+
                         self.display.send_frame(
                             df, target_point=target_point,
                             status=current_status, label=current_label,
                             error_x=err_x, fps=display_fps,
+                            state=self.state  # Pass state for MODE:X overlay
                         )
 
                 # ── 4. Sync GPU — collect current frame's raw output ──
@@ -432,6 +497,17 @@ class SystemManagerV2(object):
                 # Check display quit
                 if self.display and not self.display.is_running():
                     break
+                    
+                # Keyboard state override via multiprocessing queue (from display window)
+                if self.display:
+                    cmd_ch = self.display.get_key()
+                    if cmd_ch in ('0', '1', '2'):
+                        self.state = int(cmd_ch)
+                        logger.info("Switched state to: %d", self.state)
+                
+                # Periodically warm up idle engines (every ~30 cycles)
+                if frame_count == 30:
+                    self._warmup_idle_engines()
 
         finally:
             self.cleanup()

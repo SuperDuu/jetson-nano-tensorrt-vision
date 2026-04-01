@@ -29,10 +29,11 @@ class DisplayProcess(object):
 
     def __init__(self, window_name="RBC2026 V2", max_queue_size=2):
         self._queue = mp.Queue(maxsize=max_queue_size)
+        self._key_queue = mp.Queue(maxsize=10) # For passing key presses back to main
         self._stop_event = mp.Event()
         self._process = mp.Process(
             target=DisplayProcess._display_loop,
-            args=(self._queue, self._stop_event, window_name),
+            args=(self._queue, self._key_queue, self._stop_event, window_name),
             daemon=True,
         )
 
@@ -42,7 +43,7 @@ class DisplayProcess(object):
         return self
 
     def send_frame(self, frame, target_point=None, status="", label="",
-                   error_x=0, fps=0.0, extra_dets=None):
+                   error_x=0, fps=0.0, extra_dets=None, state=0):
         """
         Send a frame + overlay data to the display process (non-blocking).
         Drops old frames if queue is full.
@@ -55,6 +56,7 @@ class DisplayProcess(object):
             error_x: Error X value for HUD.
             fps: Current FPS for HUD.
             extra_dets: List of ([x1,y1,x2,y2], label, score) for debug boxes.
+            state: Current algorithm state (1 or 2)
         """
         payload = {
             "frame": frame,
@@ -64,6 +66,7 @@ class DisplayProcess(object):
             "err_x": error_x,
             "fps": fps,
             "dets": extra_dets,
+            "state": state,
         }
 
         # Non-blocking: drop oldest if full
@@ -77,8 +80,15 @@ class DisplayProcess(object):
         except Exception:
             pass
 
+    def get_key(self):
+        """Get the latest key typed in the display window."""
+        try:
+            return self._key_queue.get_nowait()
+        except Exception:
+            return None
+
     @staticmethod
-    def _display_loop(queue, stop_event, window_name):
+    def _display_loop(queue, key_queue, stop_event, window_name):
         """Static method running in child process."""
         while not stop_event.is_set():
             try:
@@ -86,17 +96,18 @@ class DisplayProcess(object):
             except Exception:
                 continue
 
-            frame = payload["frame"]
+            frame = payload.get("frame")
             if frame is None:
                 break
 
             h, w = frame.shape[:2]
-            target = payload["target"]
-            status = payload["status"]
-            label = payload["label"]
-            err_x = payload["err_x"]
-            fps = payload["fps"]
-            dets = payload["dets"]
+            target = payload.get("target")
+            status = payload.get("status", "")
+            label = payload.get("label", "")
+            err_x = payload.get("err_x", 0)
+            fps = payload.get("fps", 0.0)
+            dets = payload.get("dets")
+            state = payload.get("state", 0)
 
             color = (0, 255, 0) if status in ("LOCKED", "SEARCHING") else (0, 0, 255)
             sc_x = w // 2
@@ -116,16 +127,21 @@ class DisplayProcess(object):
 
             # HUD header
             cv2.rectangle(frame, (0, 0), (w, 35), (40, 40, 40), -1)
-            hud = "{} | {} | EX:{}".format(status, label, err_x)
+            hud = "MODE:{} | {} | {} | EX:{}".format(state, status, label, err_x)
             cv2.putText(frame, hud, (10, 25), 0, 0.6, (255, 255, 255), 1)
             cv2.putText(frame, "FPS:{:.1f}".format(fps),
-                        (w - 120, 25), 0, 0.6, (0, 255, 0), 2)
+                        (10, 55), 0, 0.6, (200, 200, 200), 2)
 
             cv2.imshow(window_name, frame)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 stop_event.set()
                 break
+            elif key in (ord('0'), ord('1'), ord('2')):
+                try:
+                    key_queue.put_nowait(chr(key))
+                except Exception:
+                    pass
 
         cv2.destroyAllWindows()
 
