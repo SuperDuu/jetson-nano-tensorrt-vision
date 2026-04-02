@@ -33,7 +33,7 @@ from core.gst_camera import GstCameraStream
 from core.label_smoother import LabelSmoother
 from core.utils import letterbox, preprocess_roi_for_cnn
 from core.trt_engine_v2 import TRTEngineV2
-from core.async_display import DisplayProcess
+from core.async_display import DisplayThread
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -61,7 +61,8 @@ class SystemManagerV2(object):
         self.load_mode = self.config['system'].get('load_mode', 3)
         self.state = self.config['system']['initial_state']
         self.force_square = self.config['system']['force_square']
-        self.headless = self.config['system']['headless']
+        self.headless = self.config['system'].get('headless', False)
+        self.udp_stream = self.config['system'].get('udp_stream', False)
 
         # Model references
         self.v1_vision = None  # type: RobotVisionV2
@@ -86,16 +87,21 @@ class SystemManagerV2(object):
         self.last_filtered_pt = None
 
         try:
+            # Display MUST be started BEFORE loading heavy models to avoid memory fork overhead
+            # Threads share memory, enabling zero IPC overhead for frames!
+            self.display = None
+            if not self.headless or self.udp_stream:
+                self.display = DisplayThread(
+                    "RBC2026 V2", 
+                    headless=self.headless, 
+                    udp_stream=self.udp_stream
+                ).start()
+                print("  DisplayThread OSD started.", flush=True)
+
             print("  Initializing hardware (GStreamer)...", flush=True)
             self._init_hardware()
             print("  Initializing models (GPU V2)...", flush=True)
             self._init_models()
-
-            # Display process (separate OS process)
-            self.display = None
-            if not self.headless:
-                self.display = DisplayProcess("RBC2026 V2").start()
-                print("  DisplayProcess started.", flush=True)
 
             print("  V2 Ready (double-buffer mode).", flush=True)
             logger.info("SystemManagerV2 initialized. State: %d", self.state)
@@ -338,33 +344,53 @@ class SystemManagerV2(object):
 
         # Double-buffer state
         prev_raw = None   # Previous frame's raw TRT output + metadata
-        prev_frame = None  # Previous frame (for CNN ROI)
         prev_vision = None  # Vision object used for previous frame
+        last_frame_ref = None
+
+        # Dynamic dt filter variables
+        last_kalman_time = time.time()
+        dt_filtered = 1.0 / 30.0  # Nominal starts at 30 fps speed
+        alpha_dt = 0.1 # Real-time Low-pass filter smoothing
 
         try:
             while self.running:
-                # ── 1. Read Frame ─────────────────────────────────
+                # ── 1. Read Frame (Non-Blocking) ──────────────────
                 if self.use_test_image:
                     frame = self.test_frame.copy()
                 elif self.camera and not self.camera.stopped:
-                    frame = self.camera.read_latest()
+                    frame = self.camera.read_latest(wait=False)
                 else:
                     break
 
                 if frame is None:
                     continue
 
+                curr_t = time.time()
+                dt_raw = curr_t - last_kalman_time
+                if dt_raw > 0.001:  # Prevent divide-by-zero or micro-steps
+                    dt_filtered = alpha_dt * dt_raw + (1.0 - alpha_dt) * dt_filtered
+                    last_kalman_time = curr_t
+                    
+                # Normalize dt so 30fps = dt 1.0 (to maintain backwards compatibility with velocity equations)
+                dt_virtual = dt_filtered * 30.0
+
                 h_orig, w_orig = frame.shape[:2]
                 vision = self._get_current_vision()
 
-                # ── 2. Launch ASYNC GPU inference for current frame ─
-                if vision:
+                is_new_frame = (frame is not last_frame_ref)
+                last_frame_ref = frame
+
+                # ── 2. Launch ASYNC GPU inference for NEW frame ─
+                meta = None
+                if vision and is_new_frame:
                     conf = self._get_conf_threshold()
                     meta = vision.launch_inference(frame)
-                else:
-                    meta = None
 
                 # ── 3. CPU: Post-process PREVIOUS frame (overlapped) ──
+                new_pt = None
+                a_label = "NONE"
+                all_dets = []
+                  
                 if prev_raw is not None and prev_vision is not None:
                     dets = prev_vision.postprocess_raw(
                         prev_raw['tensors'],
@@ -372,30 +398,30 @@ class SystemManagerV2(object):
                         prev_raw['scale'], prev_raw['pad_x'], prev_raw['pad_y'],
                     )
                     new_pt, a_label, all_dets = self._apply_tracking(
-                        dets, prev_frame, prev_vision,
+                        dets, prev_raw['frame'], prev_vision,
                         prev_raw['h'], prev_raw['w'],
                     )
-
-                    # Kalman update
+                    
+                # ── 4. Independent Kalman Tracking (EMA filter integration) ─
+                current_vision = self._get_current_vision()
+                if current_vision:
                     if new_pt:
-                        tx, ty = prev_vision.update_kalman(new_pt[0], new_pt[1])
+                        tx, ty = current_vision.update_kalman(new_pt[0], new_pt[1], dt=dt_virtual)
                         if not self.last_filtered_pt:
                             logger.info("Target LOCKED at (%d, %d) label='%s'", tx, ty, a_label)
                         self.last_filtered_pt = (tx, ty)
-                        current_status = "LOCKED"
-                        if a_label != "NONE" or current_label == "NONE":
-                            current_label = a_label
                         loss_counter = 0
+                        current_label = a_label
                     else:
                         loss_counter += 1
                         if loss_counter < max_loss and self.last_filtered_pt:
-                            tx, ty = prev_vision.update_kalman()
+                            tx, ty = current_vision.update_kalman(dt=dt_virtual)
                         else:
                             tx, ty = w_orig // 2, h_orig // 2
                             if loss_counter == max_loss:
                                 logger.info("Target LOST - returning to center")
 
-                    # Status
+                    # Status Check
                     if loss_counter <= 1:
                         current_status = "LOCKED"
                     elif loss_counter < max_loss:
@@ -408,18 +434,16 @@ class SystemManagerV2(object):
                     # Display mapping
                     if self.force_square:
                         imgsz = 512
-                        _, scale_d, (pw, ph) = letterbox(prev_frame, (imgsz, imgsz))
-                        dtx, dty = int(tx * scale_d + pw), int(ty * scale_d + ph)
-                        sc_x = imgsz // 2
-                        target_point = (dtx, dty)
-                    else:
-                        sc_x = w_orig // 2
+                        sc_ratio = min(imgsz / h_orig, imgsz / w_orig)
+                        new_w = int(round(w_orig * sc_ratio))
+                        pw_val = (imgsz - new_w) / 2.0
+                        dtx = int(tx * sc_ratio + pw_val)
+                        
                         target_point = (tx, ty)
-                        scale_d = 1.0
-                        pw = 0
-                        ph = 0
-
-                    err_x = int(target_point[0] - sc_x) if current_status in ("LOCKED", "SEARCHING") else 999
+                        err_x = int(dtx - imgsz // 2) if current_status in ("LOCKED", "SEARCHING") else 999
+                    else:
+                        target_point = (tx, ty)
+                        err_x = int(tx - w_orig // 2) if current_status in ("LOCKED", "SEARCHING") else 999
 
                     # UART
                     curr_t = time.time()
@@ -445,29 +469,18 @@ class SystemManagerV2(object):
 
                     # Send to DisplayProcess
                     if self.display and self.display.is_running():
-                        if self.force_square:
-                            df = letterbox(prev_frame, (512, 512))[0]
-                        else:
-                            df = prev_frame.copy()
-
-                        # Overlays for test_image mode (same as system_manager.py)
-                        if self.use_test_image and all_dets:
-                            for box, b_label, b_score in all_dets:
-                                bx1, by1, bx2, by2 = box
-                                dbx1, dby1 = int(bx1 * scale_d + pw), int(by1 * scale_d + ph)
-                                dbx2, dby2 = int(bx2 * scale_d + pw), int(by2 * scale_d + ph)
-                                cv2.rectangle(df, (dbx1, dby1), (dbx2, dby2), (0, 255, 0), 1)
-                                cv2.putText(df, "{} {:.2f}".format(b_label, b_score),
-                                            (dbx1, dby1 - 5), 0, 0.4, (0, 255, 0), 1)
+                        df = prev_frame.copy()
 
                         self.display.send_frame(
                             df, target_point=target_point,
                             status=current_status, label=current_label,
                             error_x=err_x, fps=display_fps,
-                            state=self.state  # Pass state for MODE:X overlay
+                            extra_dets=all_dets if self.use_test_image else None,
+                            state=self.state, force_square=self.force_square
                         )
 
-                # ── 4. Sync GPU — collect current frame's raw output ──
+                # ── 5. Sync GPU — collect current frame's raw output ──
+                # Only block array swap if we ACTIVELY launched inference this loop.
                 if vision and meta is not None:
                     tensors = vision.collect_raw_output()
                     prev_raw = {
@@ -475,24 +488,23 @@ class SystemManagerV2(object):
                         'scale': meta[0], 'pad_x': meta[1], 'pad_y': meta[2],
                         'h': h_orig, 'w': w_orig,
                         'state': self.state,
+                        'frame': frame
                     }
-                    prev_frame = frame
                     prev_vision = vision
                 else:
                     prev_raw = None
-                    prev_frame = None
                     prev_vision = None
 
-                # ── 5. FPS ────────────────────────────────────────
+                # ── 6. FPS ─────────────────────────────────────────
                 frame_count += 1
-                curr_t = time.time()
-                if curr_t - last_fps_time >= 0.5:
-                    display_fps = frame_count / (curr_t - last_fps_time)
-                    print("FPS: {:.1f} | {} | {}".format(
+                fps_t = time.time()
+                if fps_t - last_fps_time >= 0.5:
+                    display_fps = frame_count / (fps_t - last_fps_time)
+                    print("FPS(Loop): {:.1f} | {} | {}".format(
                         display_fps, current_status, current_label
                     ), end='\r')
                     frame_count = 0
-                    last_fps_time = curr_t
+                    last_fps_time = fps_t
 
                 # Check display quit
                 if self.display and not self.display.is_running():
@@ -505,9 +517,9 @@ class SystemManagerV2(object):
                         self.state = int(cmd_ch)
                         logger.info("Switched state to: %d", self.state)
                 
-                # Periodically warm up idle engines (every ~30 cycles)
-                if frame_count == 30:
-                    self._warmup_idle_engines()
+                # Periodically warm up idle engines is disabled. 
+                # (Running inference on idle TRT models during tracking causes massive 40ms jitter spikes on Jetson Nano).
+                pass
 
         finally:
             self.cleanup()
