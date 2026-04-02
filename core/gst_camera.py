@@ -52,9 +52,10 @@ def _build_gst_pipeline(src, width, height, framerate=30, camera_type="auto"):
         # Uses v4l2src with nvvidconv for hardware-accelerated color conversion
         dev = src if isinstance(src, str) else "/dev/video{}".format(src)
         pipeline = (
-            "v4l2src device={dev} io-mode=2 ! "
+            "v4l2src device={dev} ! "
             "image/jpeg, width=(int){w}, height=(int){h}, "
             "framerate=(fraction){fps}/1 ! "
+            "jpegparse ! "
             "nvv4l2decoder mjpeg=1 ! "
             "nvvidconv ! "
             "video/x-raw, format=(string)BGRx ! "
