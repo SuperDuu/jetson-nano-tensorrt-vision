@@ -7,7 +7,7 @@ Compatible with Python 3.6+ / CUDA 10.2 / Jetson Nano.
 
 LETTERBOX_KERNEL_SOURCE = r"""
 __global__ void letterbox_preprocess(
-    const unsigned char* __restrict__ src,
+    const uchar4* __restrict__ src,
     float* __restrict__ dst,
     int src_h, int src_w,
     int dst_h, int dst_w,
@@ -49,21 +49,25 @@ __global__ void letterbox_preprocess(
     float w10 = (1.0f - fx) * fy;
     float w11 = fx * fy;
 
-    /* BGR -> RGB conversion: src channel 2->R(0), 1->G(1), 0->B(2) */
-    int s00 = (y0 * src_w + x0) * 3;
-    int s01 = (y0 * src_w + x1) * 3;
-    int s10 = (y1 * src_w + x0) * 3;
-    int s11 = (y1 * src_w + x1) * 3;
+    /* Access uchar4 pixels */
+    int s00 = y0 * src_w + x0;
+    int s01 = y0 * src_w + x1;
+    int s10 = y1 * src_w + x0;
+    int s11 = y1 * src_w + x1;
+    
+    uchar4 p00 = src[s00];
+    uchar4 p01 = src[s01];
+    uchar4 p10 = src[s10];
+    uchar4 p11 = src[s11];
 
-    #pragma unroll
-    for (int c = 0; c < 3; c++) {
-        int sc = 2 - c;  /* BGR to RGB channel swap */
-        float v = (float)src[s00 + sc] * w00
-                + (float)src[s01 + sc] * w01
-                + (float)src[s10 + sc] * w10
-                + (float)src[s11 + sc] * w11;
-        dst[c * spatial + dst_base] = v / 255.0f;
-    }
+    /* Output is CHW float rgb. src is BGRx -> p.x=B, p.y=G, p.z=R, p.w=x */
+    float b = (float)p00.x * w00 + (float)p01.x * w01 + (float)p10.x * w10 + (float)p11.x * w11;
+    float g = (float)p00.y * w00 + (float)p01.y * w01 + (float)p10.y * w10 + (float)p11.y * w11;
+    float r = (float)p00.z * w00 + (float)p01.z * w01 + (float)p10.z * w10 + (float)p11.z * w11;
+
+    dst[0 * spatial + dst_base] = r / 255.0f;
+    dst[1 * spatial + dst_base] = g / 255.0f;
+    dst[2 * spatial + dst_base] = b / 255.0f;
 }
 """
 

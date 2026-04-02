@@ -46,7 +46,8 @@ class GPUPreprocessor(object):
         self.logger.info("CUDA preprocess kernel compiled.")
 
         # Pre-allocate device buffers
-        src_nbytes = max_src_h * max_src_w * 3  # uint8 BGR
+        src_channels = 4
+        src_nbytes = max_src_h * max_src_w * src_channels  # uint8 BGRx
         dst_nbytes = 1 * 3 * imgsz * imgsz * 4  # float32 CHW
 
         self.d_src = cuda.mem_alloc(src_nbytes)
@@ -79,24 +80,24 @@ class GPUPreprocessor(object):
         pad_top = int(round(pad_h - 0.1))
         return r, pad_left, pad_top
 
-    def __call__(self, frame_bgr):
+    def __call__(self, frame):
         """
-        Preprocess a BGR frame on GPU.
+        Preprocess a BGRx/BGRA frame on GPU.
 
         Args:
-            frame_bgr: numpy array (H, W, 3) uint8 BGR image.
+            frame: numpy array (H, W, 4) uint8 BGRx image.
 
         Returns:
             (device_ptr, scale, pad_left, pad_top) where device_ptr points
             to the preprocessed float32 tensor [1, 3, imgsz, imgsz] on GPU.
         """
-        src_h, src_w = frame_bgr.shape[:2]
+        src_h, src_w = frame.shape[:2]
         scale, pad_left, pad_top = self._compute_letterbox_params(src_h, src_w)
         pad_val = np.float32(BACKGROUND_VALUE / 255.0)
 
         # Upload source frame to GPU (async)
-        nbytes = src_h * src_w * 3
-        self.h_src[:nbytes] = frame_bgr.ravel()
+        nbytes = src_h * src_w * 4
+        self.h_src[:nbytes] = frame.ravel()
         cuda.memcpy_htod_async(self.d_src, self.h_src[:nbytes], self.stream)
 
         # Launch kernel

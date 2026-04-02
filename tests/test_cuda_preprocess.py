@@ -49,10 +49,14 @@ def test_random_image(imgsz=512, src_h=480, src_w=640):
     print("Test: Random image {}x{} -> {}x{}".format(src_w, src_h, imgsz, imgsz))
 
     np.random.seed(42)
-    frame = np.random.randint(0, 256, (src_h, src_w, 3), dtype=np.uint8)
+    # Generate BGR
+    frame_bgr = np.random.randint(0, 256, (src_h, src_w, 3), dtype=np.uint8)
+    
+    import cv2
+    frame_bgra = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2BGRA)
 
-    cpu_out, cpu_scale, cpu_px, cpu_py = cpu_preprocess(frame, imgsz)
-    gpu_out, gpu_scale, gpu_px, gpu_py = gpu_preprocess(frame, imgsz)
+    cpu_out, cpu_scale, cpu_px, cpu_py = cpu_preprocess(frame_bgr, imgsz)
+    gpu_out, gpu_scale, gpu_px, gpu_py = gpu_preprocess(frame_bgra, imgsz)
 
     print("  CPU scale={:.4f} pad=({}, {})".format(cpu_scale, cpu_px, cpu_py))
     print("  GPU scale={:.4f} pad=({}, {})".format(gpu_scale, gpu_px, gpu_py))

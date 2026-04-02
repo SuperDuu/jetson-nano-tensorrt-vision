@@ -36,7 +36,10 @@ def preprocess_roi_for_cnn(roi: np.ndarray, input_size: int = CNN_INPUT_SIZE) ->
     
     try:
         # Convert to grayscale
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        if len(roi.shape) == 3 and roi.shape[2] == 4:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGRA2GRAY)
+        else:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
         # Calculate aspect ratio preserving resize
         h, w = gray.shape[:2]
