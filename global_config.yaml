@@ -6,6 +6,7 @@ system:
   force_square: True # Use square letterbox for display and error calculation
   inference_skip: 3 # Run inference every N frames
   headless: false # Run without GUI (terminal only)
+  udp_stream: true # Run H.264 UDP network video streamer on background thread
   target_fps: 30 # Fixed loop rate for stability
   test_image: false # If true, use a static image instead of camera
   test_image_path: "KFS_Standard/datasets/user_test/img_test_user1.jpg"
