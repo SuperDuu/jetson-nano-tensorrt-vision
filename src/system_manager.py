@@ -300,7 +300,7 @@ class SystemManager:
                 if self.use_test_image:
                     frame = self.test_frame.copy()
                 elif self.camera and not self.camera.stopped:
-                    frame = self.camera.read_latest()
+                    frame = self.camera.read_latest(wait=True, timeout=0.1)
                 else:
                     break
                 
@@ -428,11 +428,8 @@ class SystemManager:
                         self.state = int(chr(key))
                         logger.info(f"Switched state to: {self.state}")
                 
-                # Periodically warm up idle engines (every ~30 cycles)
-                warmup_counter += 1
-                if warmup_counter >= 30:
-                    self._warmup_idle_engines()
-                    warmup_counter = 0
+                # Idle engine warmup was disabled to prevent 30-40ms random latency spikes during real-time tracking
+                pass
         finally:
             self.cleanup()
 

@@ -169,8 +169,11 @@ class RobotVision:
 
         return fx1, fy1, fx2, fy2, box_id
 
-    def update_kalman(self, x: Optional[float] = None, y: Optional[float] = None) -> Tuple[int, int]:
+    def update_kalman(self, x=None, y=None, dt=1.0):
         try:
+            self.kalman.transitionMatrix[0, 2] = dt
+            self.kalman.transitionMatrix[1, 3] = dt
+            
             if x is not None and y is not None:
                 if not self.kalman_initialized:
                     self.kalman.statePre = np.array([[x], [y], [0], [0]], dtype=np.float32)
@@ -178,13 +181,13 @@ class RobotVision:
                     self.kalman_initialized = True
                     return int(x), int(y)
                 
-                # Predict → Correct cycle (đúng thứ tự)
+                # Predict -> Correct
                 self.kalman.predict()
                 self.kalman.correct(np.array([[np.float32(x)], [np.float32(y)]]))
                 state = self.kalman.statePost.flatten()
                 return int(state[0]), int(state[1])
             else:
-                # No measurement — chỉ predict (coast)
+                # No measurement - chỉ predict (coast)
                 if not self.kalman_initialized:
                     return 0, 0
                 pred = self.kalman.predict()
