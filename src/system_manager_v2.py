@@ -469,7 +469,7 @@ class SystemManagerV2(object):
 
                     # Send to DisplayProcess
                     if self.display and self.display.is_running():
-                        df = prev_frame.copy()
+                        df = prev_raw['frame'].copy() if prev_raw is not None else frame.copy()
 
                         self.display.send_frame(
                             df, target_point=target_point,
