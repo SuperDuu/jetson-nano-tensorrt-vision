@@ -119,17 +119,20 @@ class CameraStream:
         with self.lock:
             return self._frame_buf[-1] if self._frame_buf else None
     
-    def read_latest(self) -> Optional[cv2.VideoCapture]:
+    def read_latest(self, wait: bool = False, timeout: Optional[float] = None) -> Optional[np.ndarray]:
         """
-        Get the latest frame, dropping any stale frames.
+        Get the latest frame, optionally waiting for a truly new frame.
         
-        Clears the new_frame_event so the caller knows the next call
-        will only return after a genuinely new frame arrives.
-        Use this in the inference thread to avoid processing old frames.
-        
+        Args:
+            wait: If True, blocks until a new frame is captured.
+            timeout: Maximum time to wait for a frame (seconds).
         Returns:
-            Latest frame or None if not available
+            Latest frame, or None if timed out/not available.
         """
+        if wait:
+            if not self.new_frame_event.wait(timeout):
+                return None
+                
         self.new_frame_event.clear()
         with self.lock:
             return self._frame_buf[-1] if self._frame_buf else None

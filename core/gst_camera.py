@@ -45,8 +45,6 @@ def _build_gst_pipeline(src, width, height, framerate=30, camera_type="auto"):
             "format=(string)NV12, framerate=(fraction){fps}/1 ! "
             "nvvidconv flip-method=0 ! "
             "video/x-raw, width=(int){w}, height=(int){h}, format=(string)BGRx ! "
-            "videoconvert ! "
-            "video/x-raw, format=(string)BGR ! "
             "appsink drop=true max-buffers=1"
         ).format(src=src, w=width, h=height, fps=framerate)
     else:
@@ -60,8 +58,6 @@ def _build_gst_pipeline(src, width, height, framerate=30, camera_type="auto"):
             "nvv4l2decoder mjpeg=1 ! "
             "nvvidconv ! "
             "video/x-raw, format=(string)BGRx ! "
-            "videoconvert ! "
-            "video/x-raw, format=(string)BGR ! "
             "appsink drop=true max-buffers=1"
         ).format(dev=dev, w=width, h=height, fps=framerate)
 
@@ -77,8 +73,8 @@ def _build_gst_pipeline_usb_raw(src, width, height, framerate=30):
         "v4l2src device={dev} ! "
         "video/x-raw, width=(int){w}, height=(int){h}, "
         "framerate=(fraction){fps}/1 ! "
-        "videoconvert ! "
-        "video/x-raw, format=(string)BGR ! "
+        "nvvidconv ! "
+        "video/x-raw, format=(string)BGRx ! "
         "appsink drop=true max-buffers=1"
     ).format(dev=dev, w=width, h=height, fps=framerate)
 
@@ -149,6 +145,11 @@ class GstCameraStream(object):
             success, frame = self.cap.read()
             if not success:
                 raise RuntimeError("Failed to read initial frame")
+            
+            # Convert OpenCV fallback 3-channel to 4-channel BGRA
+            if frame.shape[2] == 3:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+                
             self._frame_buf.append(frame)
             self._using_gst = False
             self.logger.info("OpenCV fallback camera initialized: %s", frame.shape)
@@ -192,6 +193,10 @@ class GstCameraStream(object):
                     break
                 success, frame = self.cap.read()
                 if success:
+                    # Convert to BGRA if using raw opencv backend and 3 channels
+                    if not self._using_gst and frame.shape[2] == 3:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+                        
                     with self.lock:
                         self._frame_buf.append(frame)
                     self.new_frame_event.set()
@@ -209,8 +214,12 @@ class GstCameraStream(object):
         with self.lock:
             return self._frame_buf[-1] if self._frame_buf else None
 
-    def read_latest(self):
-        """Get latest frame and clear new_frame_event."""
+    def read_latest(self, wait=False, timeout=None):
+        """Get latest frame, optionally waiting for new data."""
+        if wait:
+            if not self.new_frame_event.wait(timeout):
+                return None
+                
         self.new_frame_event.clear()
         with self.lock:
             return self._frame_buf[-1] if self._frame_buf else None
