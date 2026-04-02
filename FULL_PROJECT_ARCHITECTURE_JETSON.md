@@ -28,7 +28,7 @@ graph TD;
         
         G -->|Tọa độ quan sát thô| H[Bộ lọc Kalman]
         H -.->|Vòng lặp ngoại suy động học liên tục| H
-        H -->|Tọa độ Tịnh tiến (tx, ty)| I[Module Giao tiếp UART]
+        H -->|Tọa độ Tịnh tiến tx ty| I[Module Giao tiếp UART]
     end
 
     subgraph Giai đoạn Hiển thị & Truyền thông Bất đồng bộ
