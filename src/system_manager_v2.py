@@ -379,6 +379,11 @@ class SystemManagerV2(object):
 
                 is_new_frame = (frame is not last_frame_ref)
                 last_frame_ref = frame
+                
+                # Critical Python Threading Fix: Yield GIL to background Camera/OSD threads
+                # If we don't sleep here, an empty unblocked while-loop will starve the entire OS.
+                if not is_new_frame:
+                    time.sleep(0.002)
 
                 # ── 2. Launch ASYNC GPU inference for NEW frame ─
                 meta = None
