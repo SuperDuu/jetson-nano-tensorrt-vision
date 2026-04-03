@@ -276,10 +276,12 @@ class SystemManagerV2(object):
 
         elif self.state == 2 and vision:
             candidates = self._get_valid_candidates(dets, w_orig, h_orig)
-            target_found = False
-            for det in candidates:
-                if target_found: break
+            target_found_in_frame = False
+            best_cx, best_cy = 0, 0
+            best_label = "NONE"
+            best_score = 0.0
 
+            for det in candidates:
                 # Validate and clamp bbox before cropping ROI
                 bbox = validate_and_clamp_bbox(
                     int(det.xyxy[0][0]), int(det.xyxy[0][1]), 
@@ -309,20 +311,24 @@ class SystemManagerV2(object):
                      all_dets.append(([x1, y1, x2, y2], label_raw, score))
 
                 if is_target and score >= self.config['v2_model']['conf_threshold_cnn']:
-                    self.label_history.append(label_raw)
-                    if len(self.label_history) > self.history_len:
-                        self.label_history.pop(0)
+                    best_cx, best_cy = (x1 + x2) // 2, (y1 + y2) // 2
+                    best_label = label_raw
+                    best_score = score
+                    target_found_in_frame = True
+                    break  # Found our primary target for this frame
 
-                    most_common = max(set(self.label_history), key=self.label_history.count)
-                    votes = self.label_history.count(most_common)
+            if target_found_in_frame:
+                self.label_history.append(best_label)
+                if len(self.label_history) > self.history_len:
+                    self.label_history.pop(0)
 
-                    if votes >= self.min_majority:
-                        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                        label, _ = self.v2_smoother.smooth("target", most_common, score)
-                        target_found = True
-                        return (cx, cy), label, all_dets
+                most_common = max(set(self.label_history), key=self.label_history.count)
+                votes = self.label_history.count(most_common)
 
-            if not target_found:
+                if votes >= self.min_majority:
+                    label, _ = self.v2_smoother.smooth("target", most_common, best_score)
+                    return (best_cx, best_cy), label, all_dets
+            else:
                 if self.use_test_image:
                     for d in dets:
                         if not any(np.array_equal(d.xyxy[0], c.xyxy[0]) for c in candidates):
