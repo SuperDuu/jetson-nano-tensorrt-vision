@@ -404,8 +404,10 @@ class SystemManagerV2(object):
                 new_pt = None
                 a_label = "NONE"
                 all_dets = []
+                has_new_result = False
                   
                 if prev_raw is not None and not prev_raw.get('processed', False):
+                    has_new_result = True
                     # Post-process frame N-1 (ensure we only do this once per result!)
                     dets = prev_vision.postprocess_raw(
                         prev_raw['tensors'],
@@ -419,81 +421,86 @@ class SystemManagerV2(object):
                     prev_raw['processed'] = True
                     
                 # ── 4. Independent Kalman Tracking (EMA filter integration) ─
-                current_vision = self._get_current_vision()
-                if current_vision:
-                    if new_pt:
-                        tx, ty = current_vision.update_kalman(new_pt[0], new_pt[1], dt=dt_virtual)
-                        if not self.last_filtered_pt:
-                            logger.info("Target LOCKED at (%d, %d) label='%s'", tx, ty, a_label)
-                        self.last_filtered_pt = (tx, ty)
-                        loss_counter = 0
-                        current_label = a_label
-                    else:
-                        loss_counter += 1
-                        if loss_counter < max_loss and self.last_filtered_pt:
-                            tx, ty = current_vision.update_kalman(dt=dt_virtual)
+                if has_new_result:
+                    current_vision = self._get_current_vision()
+                    if current_vision:
+                        if new_pt:
+                            tx, ty = current_vision.update_kalman(new_pt[0], new_pt[1], dt=dt_virtual)
+                            if not self.last_filtered_pt:
+                                logger.info("Target LOCKED at (%d, %d) label='%s'", tx, ty, a_label)
+                            self.last_filtered_pt = (tx, ty)
+                            loss_counter = 0
+                            current_label = a_label
                         else:
+                            loss_counter += 1
+                            if loss_counter < max_loss and self.last_filtered_pt:
+                                tx, ty = current_vision.update_kalman(dt=dt_virtual)
+                            else:
+                                tx, ty = w_orig // 2, h_orig // 2
+                                if loss_counter == max_loss:
+                                    logger.info("Target LOST - returning to center")
+
+                        # Status Check (Only Update on New Result)
+                        if loss_counter <= 1:
+                            current_status = "LOCKED"
+                        elif loss_counter < max_loss:
+                            current_status = "SEARCHING"
+                        else:
+                            current_status = "LOST"
+                            current_label = "NONE"
                             tx, ty = w_orig // 2, h_orig // 2
-                            if loss_counter == max_loss:
-                                logger.info("Target LOST - returning to center")
+                            self.last_filtered_pt = None # Reset prediction base
+                
+                # Predict positions for display (smooth movement between frames)
+                tx, ty = (self.last_filtered_pt[0], self.last_filtered_pt[1]) if self.last_filtered_pt else (w_orig // 2, h_orig // 2)
 
-                    # Status Check
-                    if loss_counter <= 1:
-                        current_status = "LOCKED"
-                    elif loss_counter < max_loss:
-                        current_status = "SEARCHING"
-                    else:
-                        current_status = "LOST"
-                        current_label = "NONE"
-                        tx, ty = w_orig // 2, h_orig // 2
+                # Display mapping
+                if self.force_square:
+                    imgsz = 512
+                    sc_ratio = min(imgsz / h_orig, imgsz / w_orig)
+                    new_w = int(round(w_orig * sc_ratio))
+                    pw_val = (imgsz - new_w) / 2.0
+                    dtx = int(tx * sc_ratio + pw_val)
+                    
+                    target_point = (tx, ty)
+                    err_x = int(dtx - imgsz // 2) if current_status in ("LOCKED", "SEARCHING") else 999
+                else:
+                    target_point = (tx, ty)
+                    err_x = int(tx - w_orig // 2) if current_status in ("LOCKED", "SEARCHING") else 999
 
-                    # Display mapping
-                    if self.force_square:
-                        imgsz = 512
-                        sc_ratio = min(imgsz / h_orig, imgsz / w_orig)
-                        new_w = int(round(w_orig * sc_ratio))
-                        pw_val = (imgsz - new_w) / 2.0
-                        dtx = int(tx * sc_ratio + pw_val)
-                        
-                        target_point = (tx, ty)
-                        err_x = int(dtx - imgsz // 2) if current_status in ("LOCKED", "SEARCHING") else 999
-                    else:
-                        target_point = (tx, ty)
-                        err_x = int(tx - w_orig // 2) if current_status in ("LOCKED", "SEARCHING") else 999
+                # UART
+                curr_t = time.time()
+                if self.serial_port and (curr_t - self.last_uart_time >= self.uart_interval):
+                    self.serial_port.write("{}\n".format(err_x).encode())
+                    self.last_uart_time = curr_t
 
-                    # UART
-                    curr_t = time.time()
-                    if self.serial_port and (curr_t - self.last_uart_time >= self.uart_interval):
-                        self.serial_port.write("{}\n".format(err_x).encode())
-                        self.last_uart_time = curr_t
+                    if self.serial_port.in_waiting > 0:
+                        try:
+                            cmd = self.serial_port.read(
+                                self.serial_port.in_waiting
+                            ).decode('utf-8', errors='ignore')
+                            if self.load_mode == 3:
+                                for ch in reversed(cmd):
+                                    if ch in ('0', '1', '2'):
+                                        ns = int(ch)
+                                        if ns != self.state:
+                                            self.state = ns
+                                            logger.info("UART Mode Sync: %d", self.state)
+                                        break
+                        except Exception:
+                            pass
 
-                        if self.serial_port.in_waiting > 0:
-                            try:
-                                cmd = self.serial_port.read(
-                                    self.serial_port.in_waiting
-                                ).decode('utf-8', errors='ignore')
-                                if self.load_mode == 3:
-                                    for ch in reversed(cmd):
-                                        if ch in ('0', '1', '2'):
-                                            ns = int(ch)
-                                            if ns != self.state:
-                                                self.state = ns
-                                                logger.info("UART Mode Sync: %d", self.state)
-                                            break
-                            except Exception:
-                                pass
+                # Send to DisplayProcess
+                if self.display and self.display.is_running():
+                    df = prev_raw['frame'].copy() if prev_raw is not None else frame.copy()
 
-                    # Send to DisplayProcess
-                    if self.display and self.display.is_running():
-                        df = prev_raw['frame'].copy() if prev_raw is not None else frame.copy()
-
-                        self.display.send_frame(
-                            df, target_point=target_point,
-                            status=current_status, label=current_label,
-                            error_x=err_x, fps=display_fps,
-                            extra_dets=all_dets if self.use_test_image else None,
-                            state=self.state, force_square=self.force_square
-                        )
+                    self.display.send_frame(
+                        df, target_point=target_point,
+                        status=current_status, label=current_label,
+                        error_x=err_x, fps=display_fps,
+                        extra_dets=all_dets if self.use_test_image else None,
+                        state=self.state, force_square=self.force_square
+                    )
 
                 # ── 5. Sync GPU — collect current frame's raw output ──
                 # Only block array swap if we ACTIVELY launched inference this loop.
