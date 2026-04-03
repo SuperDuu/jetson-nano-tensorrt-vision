@@ -26,7 +26,7 @@ class UDPStreamer:
             f"nvvidconv ! video/x-raw(memory:NVMM), format=NV12 ! "
             f"nvv4l2h264enc insert-sps-pps=true bitrate={bitrate} ! "
             f"h264parse ! rtph264pay config-interval=1 ! "
-            f"udpsink host={host} port={port} auto-multicast=true"
+            f"udpsink host={host} port={port} qos=false max-lateness=-1"
         )
         
         self.writer = cv2.VideoWriter(

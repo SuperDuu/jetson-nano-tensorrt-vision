@@ -36,8 +36,6 @@ class DisplayThread(object):
         self.udp_stream = udp_stream
         
         self.streamer = None
-        if self.udp_stream and UDPStreamer is not None:
-            self.streamer = UDPStreamer()
             
         self._thread = threading.Thread(
             target=self._display_loop,
