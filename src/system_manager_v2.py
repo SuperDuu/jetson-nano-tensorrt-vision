@@ -31,7 +31,7 @@ from core.config_manager import ConfigManager
 from core.vision_v2 import RobotVisionV2
 from core.gst_camera import GstCameraStream
 from core.label_smoother import LabelSmoother
-from core.utils import letterbox, preprocess_roi_for_cnn
+from core.utils import letterbox, preprocess_roi_for_cnn, validate_and_clamp_bbox
 from core.trt_engine_v2 import TRTEngineV2
 from core.async_display import DisplayThread
 
