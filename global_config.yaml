@@ -10,7 +10,7 @@ system:
   test_image_path: "KFS_Standard/datasets/user_test/img_test_user1.jpg"
 
 detection:
-  max_loss_frames: 15 # Frames to keep Kalman prediction after target lost
+  max_loss_frames: 10 # Frames to keep Kalman prediction after target lost
 
 hardware:
   camera:
@@ -39,7 +39,7 @@ v2_model:
   labels_json: "models/labels_cnn_kfs.json"
   yolo_input_size: 512
   cnn_input_size: 64
-  conf_threshold_yolo: 0.7
-  conf_threshold_cnn: 0.6
+  conf_threshold_yolo: 0.5
+  conf_threshold_cnn: 0.5
   background_value: 128
   target_types: ["REAL"]
