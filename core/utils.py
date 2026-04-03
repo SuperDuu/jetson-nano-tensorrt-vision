@@ -46,8 +46,9 @@ def preprocess_roi_for_cnn(roi: np.ndarray, input_size: int = CNN_INPUT_SIZE) ->
         scale = input_size / max(h, w)
         nw, nh = int(w * scale), int(h * scale)
         
-        # Resize with high-quality interpolation
-        resized = cv2.resize(gray, (nw, nh), interpolation=cv2.INTER_AREA)
+        # Choose interpolation: INTER_CUBIC for upscaling, INTER_AREA for downscaling
+        interp = cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA
+        resized = cv2.resize(gray, (nw, nh), interpolation=interp)
         
         # Create canvas with gray background
         canvas = np.full((input_size, input_size), BACKGROUND_VALUE, dtype=np.uint8)
@@ -57,8 +58,19 @@ def preprocess_roi_for_cnn(roi: np.ndarray, input_size: int = CNN_INPUT_SIZE) ->
         x_offset = (input_size - nw) // 2
         canvas[y_offset:y_offset+nh, x_offset:x_offset+nw] = resized
         
-        # Reshape and normalize to [0, 1]
-        return canvas.reshape(1, input_size, input_size, 1).astype(np.float32) / 255.0
+        # Convert to float32
+        canvas_float = canvas.astype(np.float32)
+        
+        # Standardize (Zero-Mean, Unit-Variance) matching tf.image.per_image_standardization
+        mean = np.mean(canvas_float)
+        stddev = np.std(canvas_float)
+        num_pixels = canvas_float.size
+        adjusted_stddev = max(stddev, 1.0 / np.sqrt(num_pixels))
+        
+        standardized = (canvas_float - mean) / adjusted_stddev
+        
+        # Reshape to (1, input_size, input_size, 1)
+        return standardized.reshape(1, input_size, input_size, 1)
     
     except Exception as e:
         logger.error(f"Error preprocessing ROI: {e}")
