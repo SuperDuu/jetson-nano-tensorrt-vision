@@ -5,7 +5,7 @@ system:
   load_mode: 3 # 1: KFS only, 2: SpearHead only, 3: All models + UART switching
   force_square: True # Use square letterbox for display and error calculation
   headless: false # Run without GUI (terminal only)
-  udp_stream: false # Run H.264 UDP network video streamer on background thread
+  udp_stream: true # Run H.264 UDP network video streamer on background thread
   test_image: false # If true, use a static image instead of camera
   test_image_path: "KFS_Standard/datasets/user_test/img_test_user1.jpg"
 

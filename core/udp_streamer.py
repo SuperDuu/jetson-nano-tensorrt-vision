@@ -8,7 +8,7 @@ class UDPStreamer:
     Hardware-accelerated H.264 UDP Video Streamer for Jetson Nano.
     Uses NVENC (nvv4l2h264enc) to offload video compression from CPU.
     """
-    def __init__(self, host="127.0.0.1", port=5000, width=640, height=480, fps=30, bitrate=4000000):
+    def __init__(self, host="127.0.0.1", port=5000, width=640, height=480, fps=30, bitrate=2000000):
         self.host = host
         self.port = port
         self.width = width

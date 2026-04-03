@@ -36,6 +36,9 @@ class DisplayThread(object):
         self.udp_stream = udp_stream
         
         self.streamer = None
+        if self.udp_stream and UDPStreamer is not None:
+             # Fixed Laptop IP for Wifi/Ethernet Modem Setup
+            self.streamer = UDPStreamer(host="192.168.2.1")
             
         self._thread = threading.Thread(
             target=self._display_loop,
