@@ -18,53 +18,37 @@ CNN_INPUT_SIZE = 64
 
 def preprocess_roi_for_cnn(roi: np.ndarray, input_size: int = CNN_INPUT_SIZE) -> Optional[np.ndarray]:
     """
-    Preprocess ROI (Region of Interest) for CNN classification.
-    
-    Converts ROI to grayscale, resizes with aspect ratio preservation,
-    and pads to fixed size with gray background.
-    
-    Args:
-        roi: Input ROI image (BGR format)
-        input_size: Target input size (default: 64)
-    
-    Returns:
-        Preprocessed array of shape (1, input_size, input_size, 1) normalized to [0, 1],
-        or None if ROI is invalid
+    Preprocess ROI for CNN classification.
+    Optimized for ARM processors: uses squashing resize to match training pipeline.
     """
     if roi is None or roi.size == 0:
         return None
     
     try:
-        # Convert to grayscale
-        if len(roi.shape) == 3 and roi.shape[2] == 4:
-            gray = cv2.cvtColor(roi, cv2.COLOR_BGRA2GRAY)
+        # 1. Convert to grayscale
+        if len(roi.shape) == 3:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGRA2GRAY) if roi.shape[2] == 4 else cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         else:
-            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            gray = roi
         
-        # Calculate aspect ratio preserving resize
+        # 2. Resize directly to (input_size, input_size) to MATCH SQUASHED training images
+        # tf.image_dataset_from_directory and tf.image.resize squash images by default.
         h, w = gray.shape[:2]
         scale = input_size / max(h, w)
-        nw, nh = int(w * scale), int(h * scale)
         
-        # Choose interpolation: INTER_CUBIC for upscaling, INTER_AREA for downscaling
-        interp = cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA
-        resized = cv2.resize(gray, (nw, nh), interpolation=interp)
+        # Use INTER_CUBIC for upscaling, INTER_AREA for downscaling
+        interp = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+        resized = cv2.resize(gray, (input_size, input_size), interpolation=interp)
         
-        # Create canvas with gray background
-        canvas = np.full((input_size, input_size), BACKGROUND_VALUE, dtype=np.uint8)
+        # 3. Convert to float32 and Standardize
+        canvas_float = resized.astype(np.float32)
         
-        # Center the resized image on canvas
-        y_offset = (input_size - nh) // 2
-        x_offset = (input_size - nw) // 2
-        canvas[y_offset:y_offset+nh, x_offset:x_offset+nw] = resized
+        # Standardize (Zero-Mean, Unit-Variance) - Optimized with cv2.meanStdDev
+        mean_val, std_val = cv2.meanStdDev(canvas_float)
+        mean = mean_val[0][0]
+        stddev = std_val[0][0]
         
-        # Convert to float32
-        canvas_float = canvas.astype(np.float32)
-        
-        # Standardize (Zero-Mean, Unit-Variance) matching tf.image.per_image_standardization
-        mean = np.mean(canvas_float)
-        stddev = np.std(canvas_float)
-        num_pixels = canvas_float.size
+        num_pixels = input_size * input_size
         adjusted_stddev = max(stddev, 1.0 / np.sqrt(num_pixels))
         
         standardized = (canvas_float - mean) / adjusted_stddev
@@ -75,6 +59,24 @@ def preprocess_roi_for_cnn(roi: np.ndarray, input_size: int = CNN_INPUT_SIZE) ->
     except Exception as e:
         logger.error(f"Error preprocessing ROI: {e}")
         return None
+
+
+def validate_and_clamp_bbox(x1: int, y1: int, x2: int, y2: int, frame_shape: Tuple[int, int, int]) -> Optional[Tuple[int, int, int, int]]:
+    """
+    Validate and Clamp Bounding Box before cropping ROI.
+    Prevents memory errors or crashes from invalid YOLO indices.
+    """
+    h_frame, w_frame = frame_shape[:2]
+    
+    x1_c = max(0, min(x1, w_frame - 1))
+    y1_c = max(0, min(y1, h_frame - 1))
+    x2_c = max(0, min(x2, w_frame))
+    y2_c = max(0, min(y2, h_frame))
+    
+    if x2_c <= x1_c or y2_c <= y1_c:
+        return None
+        
+    return (x1_c, y1_c, x2_c, y2_c)
 
 
 def validate_roi_bounds(roi: np.ndarray, frame_shape: Tuple[int, int, int]) -> bool:

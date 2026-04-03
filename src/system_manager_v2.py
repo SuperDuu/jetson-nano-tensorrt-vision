@@ -280,8 +280,17 @@ class SystemManagerV2(object):
             for det in candidates:
                 if target_found: break
 
-                x1, y1, x2, y2 = map(int, det.xyxy[0])
-                roi = frame[max(0, y1):min(h_orig, y2), max(0, x1):min(w_orig, x2)]
+                # Validate and clamp bbox before cropping ROI
+                bbox = validate_and_clamp_bbox(
+                    int(det.xyxy[0][0]), int(det.xyxy[0][1]), 
+                    int(det.xyxy[0][2]), int(det.xyxy[0][3]), 
+                    frame.shape
+                )
+                if bbox is None:
+                    continue
+                    
+                x1, y1, x2, y2 = bbox
+                roi = frame[y1:y2, x1:x2]
                 cnn_input_size = self.config['v2_model']['cnn_input_size']
                 input_data = preprocess_roi_for_cnn(roi, input_size=cnn_input_size)
                 if input_data is None:
