@@ -405,7 +405,8 @@ class SystemManagerV2(object):
                 a_label = "NONE"
                 all_dets = []
                   
-                if prev_raw is not None and prev_vision is not None:
+                if prev_raw is not None and not prev_raw.get('processed', False):
+                    # Post-process frame N-1 (ensure we only do this once per result!)
                     dets = prev_vision.postprocess_raw(
                         prev_raw['tensors'],
                         self._get_conf_threshold_for_state(prev_raw['state']),
@@ -415,6 +416,7 @@ class SystemManagerV2(object):
                         dets, prev_raw['frame'], prev_vision,
                         prev_raw['h'], prev_raw['w'],
                     )
+                    prev_raw['processed'] = True
                     
                 # ── 4. Independent Kalman Tracking (EMA filter integration) ─
                 current_vision = self._get_current_vision()
@@ -502,12 +504,10 @@ class SystemManagerV2(object):
                         'scale': meta[0], 'pad_x': meta[1], 'pad_y': meta[2],
                         'h': h_orig, 'w': w_orig,
                         'state': self.state,
-                        'frame': frame
+                        'frame': frame,
+                        'processed': False  # Flag for the processor at start of loop
                     }
                     prev_vision = vision
-                else:
-                    prev_raw = None
-                    prev_vision = None
 
                 # ── 6. FPS ─────────────────────────────────────────
                 frame_count += 1
