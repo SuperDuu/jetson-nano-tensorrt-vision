@@ -74,15 +74,7 @@ class UARTManager:
                 write_timeout=None
             )
             self.connected = True
-            self.logger.info(f"UART initialized successfully on {self.port} at {self.baudrate} baud")
-        
-        except serial.SerialException as e:
-            self.logger.warning(
-                f"UART port not available ({self.port}): {e}. "
-                "Running in no-UART mode."
-            )
-            self.connected = False
-            self.ser = None
+            self.logger.info(f"UART initialized successfully on {self.port} at {self.baudrate} baud") 
         
         except Exception as e:
             self.logger.error(f"Unexpected error initializing UART: {e}")
