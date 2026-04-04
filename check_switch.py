@@ -4,37 +4,70 @@ import time
 import os
 import sys
 
-# Configuration
-INPUT_PIN = 16  # Pin 5 (Board numbering)
-# Use the actual absolute path for user 'du'
+# ==================================================
+# CONFIGURATION - KIỂM TRA KỸ ĐƯỜNG DẪN
+# ==================================================
+INPUT_PIN = 16  # Đã đổi sang chân 16 an toàn (Board numbering)
 PROJECT_ROOT = "/home/pi/Desktop/jetson-nano-tensorrt-vision"
-SCRIPT_PATH = os.path.join(PROJECT_ROOT, "src/system_manager_v2.py")
-PYTHON_EXEC = "/home/pi/Desktop/jetson-nano-tensorrt-vision/venv/bin/python3"
-def main():
-    GPIO.setmode(GPIO.BOARD)
-    GPIO.setup(INPUT_PIN, GPIO.IN)
 
-    print(f"--- Boot check on Pin {INPUT_PIN} ---")
+# TRỎ THẲNG VÀO PYTHON TRONG VENV ĐỂ NHẬN THƯ VIỆN (pyserial, cv2...)
+PYTHON_EXEC = os.path.join(PROJECT_ROOT, "venv/bin/python3")
+SCRIPT_PATH = os.path.join(PROJECT_ROOT, "src/system_manager_v2.py")
+
+def main():
+    # 1. Cấu hình GPIO
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BOARD)
+    # Dùng PUD_UP vì chân 16 không có trở kéo cứng
+    GPIO.setup(INPUT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    print(f"\n[SYSTEM] --- Boot check on Pin {INPUT_PIN} ---")
     
-    # Allow 2 seconds for voltage stabilization
+    # Chờ 2 giây để điện áp ổn định và tránh dội phím
     time.sleep(2)
 
-    # Read state: LOW (0) is CLOSED switch (Active), HIGH (1) is OPEN switch
+    # Đọc trạng thái: LOW (0) là CÔNG TẮC ĐANG BẬT (Nối chân 16 với GND)
     input_state = GPIO.input(INPUT_PIN)
     
     if input_state == GPIO.LOW:
-        print("Switch ON (LOW): Starting Vision System V2...")
-        # Start the vision manager in the background or foreground as requested.
-        # systemd will manage this script, so we can run the sub-process.
-        try:
-            subprocess.run([PYTHON_EXEC, SCRIPT_PATH], cwd=PROJECT_ROOT, check=True)
-        except KeyboardInterrupt:
-            print("System manually stopped.")
-        except Exception as e:
-            print(f"Error starting vision system: {e}")
-    else:
-        print("Switch OFF (HIGH): Vision System bypass.")
+        print(">>> Switch status: ON (LOW)")
+        print(">>> Action: Launching Vision System V2...")
 
+        # 2. THIẾT LẬP MÔI TRƯỜNG (Fix lỗi thiếu NVCC/CUDA)
+        # Sao chép môi trường hiện tại
+        full_env = os.environ.copy()
+        
+        # Ép thêm đường dẫn CUDA vào PATH để PyCUDA tìm thấy nvcc
+        cuda_bin = "/usr/local/cuda/bin"
+        cuda_lib = "/usr/local/cuda/lib64"
+        
+        full_env["PATH"] = f"{cuda_bin}:{full_env.get('PATH', '')}"
+        full_env["LD_LIBRARY_PATH"] = f"{cuda_lib}:{full_env.get('LD_LIBRARY_PATH', '')}"
+        
+        # Đảm bảo PYTHONPATH trỏ đúng vào thư mục gốc dự án
+        full_env["PYTHONPATH"] = f"{PROJECT_ROOT}:{full_env.get('PYTHONPATH', '')}"
+
+        # 3. CHẠY TIẾN TRÌNH CON
+        try:
+            # Chạy trực tiếp, kết quả in ra màn hình để debug
+            subprocess.run(
+                [PYTHON_EXEC, SCRIPT_PATH], 
+                cwd=PROJECT_ROOT, 
+                env=full_env, 
+                check=True
+            )
+        except KeyboardInterrupt:
+            print("\n[INFO] System stopped by user.")
+        except subprocess.CalledProcessError as e:
+            print(f"\n[ERROR] Vision system exited with error code {e.returncode}")
+        except Exception as e:
+            print(f"\n[ERROR] Unexpected error: {e}")
+            
+    else:
+        print(">>> Switch status: OFF (HIGH)")
+        print(">>> Action: Bypassing Vision System. Ready for manual control.")
+
+    # Dọn dẹp GPIO trước khi thoát
     GPIO.cleanup()
 
 if __name__ == "__main__":
