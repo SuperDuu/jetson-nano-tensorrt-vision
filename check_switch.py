@@ -5,7 +5,7 @@ import os
 import sys
 
 # Configuration
-INPUT_PIN = 5  # Pin 5 (Board numbering)
+INPUT_PIN = 16  # Pin 5 (Board numbering)
 # Use the actual absolute path for user 'du'
 PROJECT_ROOT = "/home/pi/Desktop/jetson-nano-tensorrt-vision"
 SCRIPT_PATH = os.path.join(PROJECT_ROOT, "src/system_manager_v2.py")
