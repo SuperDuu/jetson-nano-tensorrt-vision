@@ -18,7 +18,7 @@ hardware:
     width: 640
     height: 480
   serial:
-    port: "COM10"
+    port: "/dev/ttyACM0"
     baudrate: 115200
 
 v1_model:

@@ -13,11 +13,11 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_PORT = '/dev/ttyUSB0'
+DEFAULT_PORT = '/dev/ttyACM0'
 DEFAULT_BAUDRATE = 115200
 DEFAULT_FREQUENCY_HZ = 50
 UART_INTERVAL = 1.0 / DEFAULT_FREQUENCY_HZ  # 0.02 seconds for 50Hz
-MAX_ERROR_VALUE = 9999
+MAX_ERROR_VALUE = 999
 
 
 class UARTError(Exception):
