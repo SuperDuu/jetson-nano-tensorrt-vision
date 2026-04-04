@@ -9,8 +9,7 @@ INPUT_PIN = 16  # Pin 5 (Board numbering)
 # Use the actual absolute path for user 'du'
 PROJECT_ROOT = "/home/pi/Desktop/jetson-nano-tensorrt-vision"
 SCRIPT_PATH = os.path.join(PROJECT_ROOT, "src/system_manager_v2.py")
-PYTHON_EXEC = "/usr/bin/python3" # Explicitly use system python3
-
+PYTHON_EXEC = "/home/pi/Desktop/jetson-nano-tensorrt-vision/venv/bin/python3"
 def main():
     GPIO.setmode(GPIO.BOARD)
     GPIO.setup(INPUT_PIN, GPIO.IN)
