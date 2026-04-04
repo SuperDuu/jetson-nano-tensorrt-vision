@@ -6,10 +6,10 @@ import sys
 
 # Configuration
 INPUT_PIN = 5  # Pin 5 (Board numbering)
-# Use absolute path to ensure systemd finds it
-PROJECT_ROOT = "/home/du/Desktop/jetson-nano-tensorrt-vision"
+# Use the actual absolute path for user 'du'
+PROJECT_ROOT = "/home/pi/Desktop/jetson-nano-tensorrt-vision"
 SCRIPT_PATH = os.path.join(PROJECT_ROOT, "src/system_manager_v2.py")
-PYTHON_EXEC = sys.executable
+PYTHON_EXEC = "/usr/bin/python3" # Explicitly use system python3
 
 def main():
     GPIO.setmode(GPIO.BOARD)
