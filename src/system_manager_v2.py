@@ -34,6 +34,7 @@ from core.label_smoother import LabelSmoother
 from core.utils import letterbox, preprocess_roi_for_cnn, validate_and_clamp_bbox
 from core.trt_engine_v2 import TRTEngineV2
 from core.async_display import DisplayThread
+from core.connection import UARTManager
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -135,14 +136,16 @@ class SystemManagerV2(object):
         else:
             self.camera = None
 
+        # UART Initialization
         try:
-            self.serial_port = serial.Serial(
-                port=self.config['hardware']['serial']['port'],
-                baudrate=self.config['hardware']['serial']['baudrate'],
-                timeout=0.1,
+            serial_cfg = self.config['hardware']['serial']
+            self.uart_manager = UARTManager(
+                port=serial_cfg['port'],
+                baudrate=serial_cfg['baudrate']
             )
-        except Exception:
-            self.serial_port = None
+        except Exception as e:
+            logger.warning("UART Initialization Failed: %s", e)
+            self.uart_manager = None
 
     def _init_models(self):
         print("\n" + "=" * 50, flush=True)
@@ -228,6 +231,14 @@ class SystemManagerV2(object):
                 continue
             if area < (frame_w * frame_h * 0.001) or area > (frame_w * frame_h * 0.9):
                 continue
+            
+            # Aspect Ratio Filtering: Skip if one axis is > 3x the other
+            bw, bh = (x2 - x1), (y2 - y1)
+            if bw > 0 and bh > 0:
+                aspect_ratio = max(bw, bh) / min(bw, bh)
+                if aspect_ratio > 3.0:
+                    continue
+                    
             candidates.append((cx, cy, d))
         if not candidates:
             return []
@@ -474,27 +485,18 @@ class SystemManagerV2(object):
                     target_point = (tx, ty)
                     err_x = int(tx - w_orig // 2) if current_status in ("LOCKED", "SEARCHING") else 999
 
-                # UART
-                curr_t = time.time()
-                if self.serial_port and (curr_t - self.last_uart_time >= self.uart_interval):
-                    self.serial_port.write("{}\n".format(err_x).encode())
-                    self.last_uart_time = curr_t
-
-                    if self.serial_port.in_waiting > 0:
-                        try:
-                            cmd = self.serial_port.read(
-                                self.serial_port.in_waiting
-                            ).decode('utf-8', errors='ignore')
-                            if self.load_mode == 3:
-                                for ch in reversed(cmd):
-                                    if ch in ('0', '1', '2'):
-                                        ns = int(ch)
-                                        if ns != self.state:
-                                            self.state = ns
-                                            logger.info("UART Mode Sync: %d", self.state)
-                                        break
-                        except Exception:
-                            pass
+                # UART Communication (Asynchronous 50Hz via UARTManager)
+                if self.uart_manager:
+                    self.uart_manager.send_error(err_x)
+                    
+                    # Receive latest command from STM32 for mode synchronization
+                    if self.load_mode == 3:
+                        latest_cmd = self.uart_manager.get_latest_command()
+                        if latest_cmd:
+                            ns = int(latest_cmd)
+                            if ns != self.state:
+                                self.state = ns
+                                logger.info("UART Mode Sync via Manager: %d", self.state)
 
                 # Send to DisplayProcess
                 if self.display and self.display.is_running():
@@ -568,8 +570,8 @@ class SystemManagerV2(object):
             self.display.stop()
         if self.camera:
             self.camera.stop()
-        if self.serial_port:
-            self.serial_port.close()
+        if self.uart_manager:
+            self.uart_manager.stop()
         print("\nV2 Cleanup complete.", flush=True)
 
 

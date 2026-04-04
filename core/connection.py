@@ -176,6 +176,28 @@ class UARTManager:
         except Exception as e:
             self.logger.error(f"Error formatting UART packet: {e}")
     
+    def get_latest_command(self) -> Optional[str]:
+        """
+        Read the serial buffer and return the latest valid command ('0', '1', '2').
+        
+        Returns:
+            Latest command character or None if no valid command found.
+        """
+        if not self.ser or not self.ser.is_open:
+            return None
+            
+        try:
+            if self.ser.in_waiting > 0:
+                data = self.ser.read(self.ser.in_waiting).decode('utf-8', errors='ignore')
+                # Take the most recent relevant character
+                for ch in reversed(data):
+                    if ch in ('0', '1', '2'):
+                        return ch
+        except Exception as e:
+            self.logger.error(f"Error reading from UART: {e}")
+            
+        return None
+
     def is_connected(self) -> bool:
         """
         Check if UART connection is active.

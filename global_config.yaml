@@ -39,7 +39,7 @@ v2_model:
   labels_json: "models/labels_cnn_kfs.json"
   yolo_input_size: 512
   cnn_input_size: 64
-  conf_threshold_yolo: 0.6
-  conf_threshold_cnn: 0.6
+  conf_threshold_yolo: 0.7
+  conf_threshold_cnn: 0.7
   background_value: 128
   target_types: ["REAL"]
