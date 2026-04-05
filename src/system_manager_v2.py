@@ -81,6 +81,7 @@ class SystemManagerV2(object):
         self.history_len = 5
         self.min_majority = 2
         self.x_bin_size = 60
+        self.x_priority = self.config['detection'].get('x_priority', 0)
 
         # UART
         self.last_uart_time = 0
@@ -242,8 +243,23 @@ class SystemManagerV2(object):
             candidates.append((cx, cy, d))
         if not candidates:
             return []
-        bin_sz = self.x_bin_size
-        candidates.sort(key=lambda c: (c[0] // bin_sz, c[1]))
+
+        mid_x = frame_w / 2.0
+        
+        # Sort key:
+        # 1. Primary: Distance to center (abs(cx - mid_x))
+        # 2. Secondary: Bottom-most (-cy)
+        # Symmetry break: Add tiny penalty to objects on the non-priority side of X
+        def sort_func(c):
+            cx, cy, _ = c
+            dist = abs(cx - mid_x)
+            if self.x_priority == 0: # Left priority
+                if cx > mid_x: dist += 0.001
+            else: # Right priority
+                if cx < mid_x: dist += 0.001
+            return (dist, -cy)
+
+        candidates.sort(key=sort_func)
         return [c[2] for c in candidates]
 
     def _postprocess_detections(self, raw_outputs, vision, frame_hw, conf_threshold):

@@ -11,6 +11,7 @@ system:
 
 detection:
   max_loss_frames: 10 # Frames to keep Kalman prediction after target lost
+  x_priority: 0 # 0: left, 1: right priority for symmetric targets
 
 hardware:
   camera:
