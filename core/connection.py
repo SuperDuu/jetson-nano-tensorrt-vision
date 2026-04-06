@@ -35,14 +35,15 @@ class UARTManager:
     
     def __init__(self, port: str = DEFAULT_PORT, baudrate: int = DEFAULT_BAUDRATE):
         """
-        Initialize UART manager.
+        Initialize UART manager with lazy (non-blocking) connection.
         
         Args:
             port: Serial port path (e.g., '/dev/ttyUSB0')
             baudrate: Baud rate for serial communication
         
         Note:
-            If port is not available, system will run without UART (graceful degradation).
+            Connection is established in background thread — __init__ returns immediately.
+            If STM32 isn't ready yet, UART will auto-retry every 500ms.
         """
         self.port = port
         self.baudrate = baudrate
@@ -56,16 +57,17 @@ class UARTManager:
         
         # Connection status
         self.connected = False
+        self._connect_attempts = 0
         
-        # Initialize serial connection
-        self._init_serial()
+        # Try quick connect (non-blocking: timeout=0 means return immediately if fails)
+        self._try_connect_once()
         
-        # Start background send thread
+        # Start background send thread (will auto-retry if not connected)
         self.thread = threading.Thread(target=self._send_loop_50hz, daemon=True)
         self.thread.start()
     
-    def _init_serial(self) -> None:
-        """Initialize serial connection."""
+    def _try_connect_once(self) -> bool:
+        """Try to open serial port. Returns True if successful, False otherwise."""
         try:
             self.ser = serial.Serial(
                 self.port, 
@@ -74,23 +76,42 @@ class UARTManager:
                 write_timeout=None
             )
             self.connected = True
-            self.logger.info(f"UART initialized successfully on {self.port} at {self.baudrate} baud") 
-        
-        except Exception as e:
-            self.logger.error(f"Unexpected error initializing UART: {e}")
+            self._connect_attempts = 0
+            self.logger.info(f"UART connected on {self.port} at {self.baudrate} baud")
+            return True
+        except serial.SerialException:
+            self._connect_attempts += 1
+            if self._connect_attempts <= 3 or self._connect_attempts % 20 == 0:
+                self.logger.warning(f"UART {self.port} not ready (attempt {self._connect_attempts}), retrying in background...")
             self.connected = False
             self.ser = None
+            return False
+        except Exception as e:
+            self.logger.error(f"UART init error: {e}")
+            self.connected = False
+            self.ser = None
+            return False
     
     def _send_loop_50hz(self) -> None:
         """
         Background thread that sends UART packets at 50Hz frequency.
         
+        Auto-retries connection if STM32 isn't ready yet.
         Uses precise timing to maintain consistent send rate.
         """
         interval = UART_INTERVAL
+        reconnect_interval = 0.5  # Retry connection every 500ms
         next_t = time.perf_counter()
+        last_reconnect_t = 0.0
         
         while self.running:
+            now = time.perf_counter()
+            
+            # Auto-reconnect if not connected
+            if not self.connected and (now - last_reconnect_t) >= reconnect_interval:
+                self._try_connect_once()
+                last_reconnect_t = now
+            
             # Only send if serial connection is available and open
             if self.ser and self.ser.is_open:
                 try:
@@ -103,9 +124,14 @@ class UARTManager:
                     self.ser.flush()  # Ensure data is transmitted to the hardware
                 
                 except serial.SerialException as e:
-                    self.logger.warning(f"UART write error: {e}. Attempting reconnection...")
+                    self.logger.warning(f"UART write error: {e}. Will retry...")
                     self.connected = False
-                    self._reconnect()
+                    try:
+                        if self.ser:
+                            self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
                 
                 except Exception as e:
                     self.logger.error(f"Unexpected UART error: {e}")
@@ -120,27 +146,7 @@ class UARTManager:
                 # If we're behind schedule, reset timing
                 next_t = time.perf_counter()
     
-    def _reconnect(self) -> None:
-        """Attempt to reconnect to UART port."""
-        try:
-            if self.ser:
-                self.ser.close()
-            
-            time.sleep(0.1)  # Brief delay before reconnection
-            
-            self.ser = serial.Serial(
-                self.port,
-                self.baudrate,
-                timeout=0,
-                write_timeout=None
-            )
-            self.connected = True
-            self.logger.info(f"UART reconnected successfully on {self.port}")
-        
-        except Exception as e:
-            self.logger.warning(f"UART reconnection failed: {e}")
-            self.connected = False
-            self.ser = None
+
     
     def send_error(self, error_x: int) -> None:
         """

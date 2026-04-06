@@ -137,22 +137,23 @@ class SystemManagerV2(object):
         else:
             self.camera = None
 
-        # UART Initialization
-        try:
-            serial_cfg = self.config['hardware']['serial']
-            self.uart_manager = UARTManager(
-                port=serial_cfg['port'],
-                baudrate=serial_cfg['baudrate']
-            )
-        except Exception as e:
-            logger.warning("UART Initialization Failed: %s", e)
-            self.uart_manager = None
+        # UART Initialization (non-blocking: auto-retries in background)
+        serial_cfg = self.config['hardware']['serial']
+        self.uart_manager = UARTManager(
+            port=serial_cfg['port'],
+            baudrate=serial_cfg['baudrate']
+        )
+        if self.uart_manager.is_connected():
+            print("  UART: {} connected".format(serial_cfg['port']), flush=True)
+        else:
+            print("  UART: {} not ready, will auto-connect in background".format(serial_cfg['port']), flush=True)
 
     def _init_models(self):
         print("\n" + "=" * 50, flush=True)
         print("  [V2] LOAD MODE: {}".format(self.load_mode), flush=True)
 
         imgsz = 512  # default
+        total_start = time.time()
 
         # V1 (SpearHead)
         if self.load_mode in (2, 3):
@@ -160,8 +161,9 @@ class SystemManagerV2(object):
             v1_engine = self.config_manager.get_path('v1_model.yolo_engine')
             imgsz = v1_cfg.get('input_size', 512)
             print("  Loading V1 Engine (GPU V2): {}".format(v1_engine), flush=True)
+            t0 = time.time()
             self.v1_vision = RobotVisionV2(v1_engine, imgsz=imgsz, device="GPU")
-            print("  - V1 (SpearHead): SUCCESS", flush=True)
+            print("  - V1 (SpearHead): SUCCESS ({:.1f}s)".format(time.time() - t0), flush=True)
         else:
             print("  - V1 (SpearHead): SKIPPED (load_mode={})".format(self.load_mode), flush=True)
 
@@ -171,17 +173,21 @@ class SystemManagerV2(object):
             v2_yolo = self.config_manager.get_path('v2_model.yolo_engine')
             imgsz = v2_cfg.get('yolo_input_size', 512)
             print("  Loading V2 YOLO (GPU V2): {}".format(v2_yolo), flush=True)
+            t0 = time.time()
             self.v2_vision = RobotVisionV2(v2_yolo, imgsz=imgsz, device="GPU")
+            print("  - V2 YOLO: SUCCESS ({:.1f}s)".format(time.time() - t0), flush=True)
 
             v2_cnn = self.config_manager.get_path('v2_model.cnn_engine')
             print("  Loading V2 CNN: {}".format(v2_cnn), flush=True)
+            t0 = time.time()
             self.v2_cnn = TRTEngineV2(v2_cnn)
+            print("  - V2 CNN: SUCCESS ({:.1f}s)".format(time.time() - t0), flush=True)
 
             labels_path = self.config_manager.get_path('v2_model.labels_json')
             with open(labels_path, 'r') as f:
                 self.v2_labels = {int(v): k for k, v in json.load(f).items()}
             self.v2_smoother = LabelSmoother(window_size=7)
-            print("  - V2 (KFS): SUCCESS", flush=True)
+            print("  - V2 (KFS): COMPLETE", flush=True)
         else:
             print("  - V2 (KFS): SKIPPED (load_mode={})".format(self.load_mode), flush=True)
 
@@ -193,7 +199,15 @@ class SystemManagerV2(object):
             self.state = 1
             print("  State locked to 1 (SpearHead) for load_mode=2", flush=True)
 
+        total_time = time.time() - total_start
+        print("  Total model load time: {:.1f}s".format(total_time), flush=True)
+        
+        # Check if UART connected during model loading
+        if self.uart_manager and self.uart_manager.is_connected():
+            print("  UART: auto-connected during model load!", flush=True)
+
         print("=" * 50 + "\n", flush=True)
+
 
     def _warmup_idle_engines(self):
         """Send dummy tensor through idle engines to keep GPU memory hot."""
