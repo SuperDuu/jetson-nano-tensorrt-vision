@@ -1,7 +1,7 @@
 # Unified Configuration for RBC2026 Super Manager V2
 
 system:
-  initial_state: 2 # 0: IDLE, 1: Target (V1), 2: KFS (V2)
+  initial_state: 1 # 0: IDLE, 1: Target (V1), 2: KFS (V2)
   load_mode: 3 # 1: KFS only, 2: SpearHead only, 3: All models + UART switching
   force_square: True # Use square letterbox for display and error calculation
   headless: true # Run without GUI (terminal only)
@@ -27,7 +27,7 @@ v1_model:
   yolo_engine: "models/yolo_sp.engine"
   device: "GPU"
   input_size: 512
-  conf_threshold: 0.7
+  conf_threshold: 0.6
   nms_threshold: 0.5
   target_name: "Target"
  
