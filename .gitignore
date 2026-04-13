@@ -1,8 +1,5 @@
 venv/
 __pycache__/
-*.engine
-*.pt
-*.h5
 tmp/
 .vscode/
 *.swp

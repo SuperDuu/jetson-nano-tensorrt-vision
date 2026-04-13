@@ -47,6 +47,20 @@ def main():
         # Đảm bảo PYTHONPATH trỏ đúng vào thư mục gốc dự án
         full_env["PYTHONPATH"] = f"{PROJECT_ROOT}:{full_env.get('PYTHONPATH', '')}"
 
+        # --- BẮT BUỘC ĐỂ HIỂN THỊ RA MÀN HÌNH KHI CHẠY LÚC STARTUP ---
+        # Khi script chạy từ systemd/rc.local, không có session đồ họa.
+        # DISPLAY=:0 trỏ thẳng vào màn hình vật lý đầu tiên của Jetson Nano.
+        full_env["DISPLAY"] = full_env.get("DISPLAY", ":0")
+        # XAUTHORITY cho phép process truy cập X server với đúng quyền.
+        xauth_path = os.path.join(os.path.expanduser("~pi"), ".Xauthority")
+        if os.path.exists(xauth_path):
+            full_env["XAUTHORITY"] = xauth_path
+        else:
+            # Thử với home directory hiện tại (phòng trường hợp user khác)
+            xauth_fallback = os.path.join(os.path.expanduser("~"), ".Xauthority")
+            if os.path.exists(xauth_fallback):
+                full_env["XAUTHORITY"] = xauth_fallback
+
         # 3. CHẠY TIẾN TRÌNH CON
         try:
             # Chạy trực tiếp, kết quả in ra màn hình để debug
