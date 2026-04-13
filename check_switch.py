@@ -48,18 +48,21 @@ def main():
         full_env["PYTHONPATH"] = f"{PROJECT_ROOT}:{full_env.get('PYTHONPATH', '')}"
 
         # --- BẮT BUỘC ĐỂ HIỂN THỊ RA MÀN HÌNH KHI CHẠY LÚC STARTUP ---
-        # Khi script chạy từ systemd/rc.local, không có session đồ họa.
-        # DISPLAY=:0 trỏ thẳng vào màn hình vật lý đầu tiên của Jetson Nano.
         full_env["DISPLAY"] = full_env.get("DISPLAY", ":0")
-        # XAUTHORITY cho phép process truy cập X server với đúng quyền.
-        xauth_path = os.path.join(os.path.expanduser("~pi"), ".Xauthority")
-        if os.path.exists(xauth_path):
-            full_env["XAUTHORITY"] = xauth_path
-        else:
-            # Thử với home directory hiện tại (phòng trường hợp user khác)
-            xauth_fallback = os.path.join(os.path.expanduser("~"), ".Xauthority")
-            if os.path.exists(xauth_fallback):
-                full_env["XAUTHORITY"] = xauth_fallback
+
+        # Tìm XAUTHORITY đúng: GDM lưu auth tại /run/user/<uid>/gdm/Xauthority
+        # Không phải ~/.Xauthority (cái đó là kết nối SSH)
+        xauth_candidates = [
+            "/run/user/1000/gdm/Xauthority",   # GDM3 (Jetson Ubuntu 18.04)
+            "/run/user/1001/gdm/Xauthority",   # GDM3 (nếu uid khác)
+            "/home/pi/.Xauthority",            # Fallback cổ điển
+            os.path.join(os.path.expanduser("~"), ".Xauthority"),  # User hiện tại
+        ]
+        for xauth_path in xauth_candidates:
+            if os.path.exists(xauth_path):
+                full_env["XAUTHORITY"] = xauth_path
+                print(f"[INFO] XAUTHORITY: {xauth_path}")
+                break
 
         # --- CẤP QUYỀN X11 CHO ROOT PROCESS ---
         # Root (sudo) mặc định bị X server từ chối kết nối.
