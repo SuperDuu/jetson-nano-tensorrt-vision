@@ -158,14 +158,24 @@ class DisplayThread(object):
                 self.streamer.send_frame(frame)
 
             if not self.headless:
-                cv2.imshow(self.window_name, frame)
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    self._stop_event.set()
-                    break
-                elif key in (ord('0'), ord('1'), ord('2')):
+                try:
+                    cv2.imshow(self.window_name, frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        self._stop_event.set()
+                        break
+                    elif key in (ord('0'), ord('1'), ord('2')):
+                        try:
+                            self._key_queue.put_nowait(chr(key))
+                        except Exception:
+                            pass
+                except Exception as e:
+                    # X11 không cho phép hoặc display không tồn tại.
+                    # Chuyển sang headless để tránh crash CUDA cascade.
+                    logger.warning("Display error, switching to headless: %s", e)
+                    self.headless = True
                     try:
-                        self._key_queue.put_nowait(chr(key))
+                        cv2.destroyAllWindows()
                     except Exception:
                         pass
 

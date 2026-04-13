@@ -61,6 +61,23 @@ def main():
             if os.path.exists(xauth_fallback):
                 full_env["XAUTHORITY"] = xauth_fallback
 
+        # --- CẤP QUYỀN X11 CHO ROOT PROCESS ---
+        # Root (sudo) mặc định bị X server từ chối kết nối.
+        # xhost +local: cho phép tất cả local process (kể cả root) hiển thị lên màn hình.
+        try:
+            xhost_env = {"DISPLAY": full_env["DISPLAY"]}
+            if "XAUTHORITY" in full_env:
+                xhost_env["XAUTHORITY"] = full_env["XAUTHORITY"]
+            subprocess.run(
+                ["xhost", "+local:"],
+                env=xhost_env,
+                check=False, timeout=3,
+                capture_output=True
+            )
+            print("[INFO] xhost +local: granted (X11 display access enabled)")
+        except Exception as e:
+            print(f"[WARN] xhost failed (display may not show): {e}")
+
         # 3. CHẠY TIẾN TRÌNH CON
         try:
             # Chạy trực tiếp, kết quả in ra màn hình để debug
