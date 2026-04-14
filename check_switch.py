@@ -20,15 +20,25 @@ def cleanup_previous_instances():
     """
     Dọn sạch instance cũ trước khi launch mới.
     Giải quyết lỗi 'Device /dev/video0 is busy' khi restart.
+    Mirror logic từ cleanup_jetson.sh (đã xác nhận hoạt động).
     """
     print("[CLEANUP] Killing old vision processes...")
 
-    # Kill tất cả process system_manager_v2.py cũ
-    try:
-        subprocess.run(["pkill", "-f", "system_manager_v2.py"],
-                       check=False, timeout=3, capture_output=True)
-    except Exception:
-        pass
+    # Kill tất cả process vision cũ
+    for pattern in ["system_manager_v2.py", "system_manager.py"]:
+        try:
+            subprocess.run(["pkill", "-f", pattern],
+                           check=False, timeout=3, capture_output=True)
+        except Exception:
+            pass
+
+    # Kill zombie GStreamer processes (nguyên nhân chính gây camera busy)
+    for gst_proc in ["gst-launch-1.0", "nvgstplayer"]:
+        try:
+            subprocess.run(["pkill", "-9", gst_proc],
+                           check=False, timeout=2, capture_output=True)
+        except Exception:
+            pass
 
     # Giải phóng camera nếu vẫn bị giữ bởi process khác
     try:
@@ -37,16 +47,24 @@ def cleanup_previous_instances():
             check=False, timeout=2, capture_output=True, text=True
         )
         if result.stdout.strip():
-            # Có process đang giữ camera → kill chúng
             subprocess.run(["fuser", "-k", CAMERA_DEVICE],
                            check=False, timeout=3, capture_output=True)
             print(f"[CLEANUP] Released {CAMERA_DEVICE} from old processes")
     except Exception:
         pass
 
-    # Chờ camera được giải phóng hoàn toàn
-    time.sleep(1.5)
-    print("[CLEANUP] Done. Ready to launch.")
+    # Restart nvargus-daemon: bước QUAN TRỌNG nhất trên Jetson Nano
+    # Daemon này quản lý camera. Nếu bị treo → camera mãi busy
+    print("[CLEANUP] Restarting nvargus-daemon...")
+    try:
+        subprocess.run(["systemctl", "restart", "nvargus-daemon"],
+                       check=False, timeout=10, capture_output=True)
+    except Exception:
+        pass
+
+    # Chờ daemon khởi động lại hoàn toàn
+    time.sleep(2.0)
+    print("[CLEANUP] Done. Camera should be free now.")
 
 def main():
     # 1. Cấu hình GPIO
